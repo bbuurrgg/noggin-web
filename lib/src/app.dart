@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/theme/app_theme.dart';
+import '../core/theme/theme_mode_controller.dart';
 import '../features/auth/data/auth_providers.dart';
 import '../features/auth/presentation/auth_screen.dart';
 import '../features/dashboard/presentation/dashboard_screen.dart';
@@ -12,11 +13,14 @@ class CraneTaskApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final authState = ref.watch(authStateProvider);
+    final themeMode = ref.watch(themeModeControllerProvider);
 
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       title: 'Noggin',
       theme: AppTheme.light(),
+      darkTheme: AppTheme.dark(),
+      themeMode: themeMode,
       home: authState.when(
         data: (_) {
           final user = ref.watch(currentUserProvider);

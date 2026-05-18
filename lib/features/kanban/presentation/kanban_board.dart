@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
-import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/friendly_error_message.dart';
 import '../../drive_links/data/drive_link_providers.dart';
 import '../../drive_links/data/google_drive_url_parser.dart';
@@ -294,6 +293,7 @@ class _BoardTaskColumn extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final colorScheme = Theme.of(context).colorScheme;
     final canEdit = ref.watch(canEditBoardProvider(board.id)).value ?? false;
     final sortedTasks = [...tasks]..sort((a, b) {
       final statusOrder = a.status.compareTo(b.status);
@@ -305,9 +305,9 @@ class _BoardTaskColumn extends ConsumerWidget {
 
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: colorScheme.surface,
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: const Color(0xFFE7E7EA)),
+        border: Border.all(color: colorScheme.outlineVariant),
         boxShadow: const [
           BoxShadow(
             color: Color(0x0A000000),
@@ -408,7 +408,7 @@ class _BoardTaskColumn extends ConsumerWidget {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      backgroundColor: Colors.white,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
@@ -447,7 +447,7 @@ class _BoardTaskColumn extends ConsumerWidget {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      backgroundColor: Colors.white,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
@@ -521,16 +521,21 @@ class _KanbanColumn extends ConsumerWidget {
         invalidateBoard(ref, boardId);
       },
       builder: (context, candidateData, rejectedData) {
+        final colorScheme = Theme.of(context).colorScheme;
         final isHovering = candidateData.isNotEmpty;
         return AnimatedContainer(
           duration: const Duration(milliseconds: 160),
           margin: const EdgeInsets.only(bottom: 12),
           padding: const EdgeInsets.fromLTRB(14, 14, 14, 16),
           decoration: BoxDecoration(
-            color: isHovering ? const Color(0xFFEAF3FF) : Colors.white,
+            color:
+                isHovering
+                    ? colorScheme.primaryContainer.withValues(alpha: 0.38)
+                    : colorScheme.surface,
             borderRadius: BorderRadius.circular(28),
             border: Border.all(
-              color: isHovering ? AppTheme.accent : const Color(0xFFE7E7EA),
+              color:
+                  isHovering ? colorScheme.primary : colorScheme.outlineVariant,
             ),
             boxShadow: const [
               BoxShadow(
@@ -684,7 +689,7 @@ class _KanbanColumn extends ConsumerWidget {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      backgroundColor: Colors.white,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
@@ -709,7 +714,7 @@ class _KanbanColumn extends ConsumerWidget {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      backgroundColor: Colors.white,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
@@ -1328,11 +1333,12 @@ class _TaskDetailsSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final isCollapsible = expanded != null && onExpansionChanged != null;
+    final colorScheme = Theme.of(context).colorScheme;
     return DecoratedBox(
       decoration: BoxDecoration(
-        color: const Color(0xFFFAFAFB),
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFEDEDF0)),
+        border: Border.all(color: colorScheme.outlineVariant),
       ),
       child: SizedBox(
         width: double.infinity,
@@ -1573,11 +1579,13 @@ class _TaskCard extends StatelessWidget {
             DateTime.now().day,
           ),
         );
+    final canDrag = draggable ?? canEdit;
+    final colorScheme = Theme.of(context).colorScheme;
     final card = DecoratedBox(
       decoration: BoxDecoration(
-        color: const Color(0xFFFAFAFB),
+        color: colorScheme.surface,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFEDEDF0)),
+        border: Border.all(color: colorScheme.outlineVariant),
         boxShadow: const [
           BoxShadow(
             color: Color(0x08000000),
@@ -1598,8 +1606,9 @@ class _TaskCard extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Flexible(
+                    Expanded(
                       child: Wrap(
                         spacing: 6,
                         runSpacing: 6,
@@ -1616,37 +1625,33 @@ class _TaskCard extends StatelessWidget {
                         ],
                       ),
                     ),
-                    const Spacer(),
-                    if (draggable ?? canEdit) ...[
-                      Icon(
-                        Icons.drag_indicator_rounded,
-                        size: 18,
-                        color: Theme.of(context).colorScheme.outline,
+                    if (canDrag) ...[
+                      const SizedBox(width: 8),
+                      Tooltip(
+                        message: 'Long-press and drag to move',
+                        child: MouseRegion(
+                          cursor: SystemMouseCursors.grab,
+                          child: Padding(
+                            padding: const EdgeInsets.only(top: 1),
+                            child: Icon(
+                              Icons.drag_indicator_rounded,
+                              size: 18,
+                              color: Theme.of(context).colorScheme.outline,
+                            ),
+                          ),
+                        ),
                       ),
                     ],
                   ],
                 ),
                 const SizedBox(height: 8),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Text(
-                        task.title,
-                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Icon(
-                      Icons.visibility_rounded,
-                      size: 18,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                    ),
-                  ],
+                Text(
+                  task.title,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
                 if (hasDescription) ...[
                   const SizedBox(height: 10),
@@ -1713,7 +1718,7 @@ class _TaskCard extends StatelessWidget {
       ),
     );
 
-    if (!(draggable ?? canEdit)) {
+    if (!canDrag) {
       return card;
     }
 

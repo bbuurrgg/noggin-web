@@ -39,6 +39,7 @@ class _TaskEditorSheetState extends ConsumerState<TaskEditorSheet> {
   final _commentController = TextEditingController();
   final _aiController = TextEditingController();
   late String _status;
+  late String _priority;
   String? _assigneeId;
   DateTime? _dueAt;
   late List<String> _attachmentUrls;
@@ -62,6 +63,7 @@ class _TaskEditorSheetState extends ConsumerState<TaskEditorSheet> {
       text: task?.description ?? '',
     );
     _status = task == null ? widget.initialStatus : task.status;
+    _priority = TaskPriority.normalize(task?.priority);
     _assigneeId = task?.assigneeId;
     _dueAt = task?.dueAt;
     _attachmentUrls = List<String>.from(task?.attachmentUrls ?? const []);
@@ -115,6 +117,7 @@ class _TaskEditorSheetState extends ConsumerState<TaskEditorSheet> {
         title: title,
         description: description,
         status: _status,
+        priority: _priority,
         assigneeId: _assigneeId ?? '',
         dueAt: _dueAt,
         clearDueAt: _dueAt == null,
@@ -126,6 +129,7 @@ class _TaskEditorSheetState extends ConsumerState<TaskEditorSheet> {
         title: title,
         description: description,
         status: _status,
+        priority: _priority,
         assigneeId: _assigneeId,
         dueAt: _dueAt,
       );
@@ -352,6 +356,7 @@ class _TaskEditorSheetState extends ConsumerState<TaskEditorSheet> {
               title: _titleController.text.trim(),
               description: _descriptionController.text.trim(),
               status: _status,
+              priority: _priority,
               sortOrder: task.sortOrder,
               createdAt: task.createdAt,
               updatedAt: task.updatedAt,
@@ -613,128 +618,183 @@ class _TaskEditorSheetState extends ConsumerState<TaskEditorSheet> {
                 ],
               ),
               const SizedBox(height: 18),
-              TextField(
-                controller: _titleController,
-                autofocus: _canModify,
-                readOnly: !_canModify,
-                textInputAction: TextInputAction.next,
-                decoration: InputDecoration(
-                  labelText: 'Title',
-                  filled: true,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
-                    borderSide: BorderSide.none,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 12),
-              TextField(
-                controller: _descriptionController,
-                readOnly: !_canModify,
-                minLines: 6,
-                maxLines: 10,
-                textAlignVertical: TextAlignVertical.top,
-                decoration: InputDecoration(
-                  alignLabelWithHint: true,
-                  labelText: 'Description',
-                  filled: true,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
-                    borderSide: BorderSide.none,
-                  ),
-                ),
-              ),
-              const SizedBox(height: 14),
-              Align(
-                alignment: Alignment.center,
-                child: SegmentedButton<String>(
-                  segments:
-                      statusOptions
-                          .map(
-                            (status) => ButtonSegment<String>(
-                              value: status,
-                              label: Text(status),
-                            ),
-                          )
-                          .toList(),
-                  selected: {_status},
-                  onSelectionChanged:
-                      _canModify
-                          ? (selection) {
-                            setState(() => _status = selection.first);
-                          }
-                          : null,
-                ),
-              ),
-              if (members.isNotEmpty) ...[
-                const SizedBox(height: 14),
-                DropdownButtonFormField<String>(
-                  initialValue:
-                      members.any((member) => member.userId == _assigneeId)
-                          ? _assigneeId
-                          : '',
-                  decoration: InputDecoration(
-                    labelText: 'Assignee',
-                    filled: true,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(24),
-                      borderSide: BorderSide.none,
-                    ),
-                  ),
-                  items: [
-                    const DropdownMenuItem(
-                      value: '',
-                      child: Text('Unassigned'),
-                    ),
-                    ...members.map(
-                      (member) => DropdownMenuItem(
-                        value: member.userId,
-                        child: Text(
-                          member.displayLabel,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ),
-                  ],
-                  onChanged:
-                      _canModify
-                          ? (value) {
-                            setState(() {
-                              _assigneeId =
-                                  value == null || value.isEmpty ? null : value;
-                            });
-                          }
-                          : null,
-                ),
-              ],
-              const SizedBox(height: 14),
-              Row(
+              _TaskEditorSection(
+                title: 'Details',
                 children: [
-                  Expanded(
-                    child: OutlinedButton.icon(
-                      onPressed: _canModify ? _pickDueDate : null,
-                      icon: const Icon(Icons.event_rounded),
-                      label: Text(
-                        _dueAt == null
-                            ? 'Set due date'
-                            : 'Due ${_formatDate(_dueAt!)}',
+                  TextField(
+                    controller: _titleController,
+                    autofocus: _canModify,
+                    readOnly: !_canModify,
+                    textInputAction: TextInputAction.next,
+                    decoration: InputDecoration(
+                      labelText: 'Title',
+                      filled: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
+                        borderSide: BorderSide.none,
                       ),
                     ),
                   ),
-                  if (_dueAt != null) ...[
-                    const SizedBox(width: 8),
-                    IconButton(
-                      tooltip: 'Clear due date',
-                      onPressed:
-                          _canModify
-                              ? () => setState(() => _dueAt = null)
-                              : null,
-                      icon: const Icon(Icons.close_rounded),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _descriptionController,
+                    readOnly: !_canModify,
+                    minLines: 6,
+                    maxLines: 10,
+                    textAlignVertical: TextAlignVertical.top,
+                    decoration: InputDecoration(
+                      alignLabelWithHint: true,
+                      labelText: 'Description',
+                      filled: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
+                        borderSide: BorderSide.none,
+                      ),
                     ),
-                  ],
+                  ),
                 ],
               ),
-              const SizedBox(height: 14),
+              const SizedBox(height: 18),
+              _TaskEditorSection(
+                title: 'Workflow',
+                children: [
+                  DropdownButtonFormField<String>(
+                    initialValue: _status,
+                    decoration: InputDecoration(
+                      labelText: 'Stage',
+                      filled: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                    items:
+                        statusOptions
+                            .map(
+                              (status) => DropdownMenuItem(
+                                value: status,
+                                child: Text(
+                                  status,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            )
+                            .toList(),
+                    onChanged:
+                        _canModify
+                            ? (value) {
+                              if (value == null) {
+                                return;
+                              }
+                              setState(() => _status = value);
+                            }
+                            : null,
+                  ),
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<String>(
+                    initialValue: _priority,
+                    decoration: InputDecoration(
+                      labelText: 'Priority',
+                      filled: true,
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(24),
+                        borderSide: BorderSide.none,
+                      ),
+                    ),
+                    items:
+                        TaskPriority.values
+                            .map(
+                              (priority) => DropdownMenuItem(
+                                value: priority,
+                                child: Text(TaskPriority.label(priority)),
+                              ),
+                            )
+                            .toList(),
+                    onChanged:
+                        _canModify
+                            ? (value) {
+                              if (value == null) {
+                                return;
+                              }
+                              setState(() {
+                                _priority = TaskPriority.normalize(value);
+                              });
+                            }
+                            : null,
+                  ),
+                  if (members.isNotEmpty) ...[
+                    const SizedBox(height: 14),
+                    DropdownButtonFormField<String>(
+                      initialValue:
+                          members.any((member) => member.userId == _assigneeId)
+                              ? _assigneeId
+                              : '',
+                      decoration: InputDecoration(
+                        labelText: 'Assignee',
+                        filled: true,
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(24),
+                          borderSide: BorderSide.none,
+                        ),
+                      ),
+                      items: [
+                        const DropdownMenuItem(
+                          value: '',
+                          child: Text('Unassigned'),
+                        ),
+                        ...members.map(
+                          (member) => DropdownMenuItem(
+                            value: member.userId,
+                            child: Text(
+                              member.displayLabel,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ),
+                      ],
+                      onChanged:
+                          _canModify
+                              ? (value) {
+                                setState(() {
+                                  _assigneeId =
+                                      value == null || value.isEmpty
+                                          ? null
+                                          : value;
+                                });
+                              }
+                              : null,
+                    ),
+                  ],
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: _canModify ? _pickDueDate : null,
+                          icon: const Icon(Icons.event_rounded),
+                          label: Text(
+                            _dueAt == null
+                                ? 'Set due date'
+                                : 'Due ${_formatDate(_dueAt!)}',
+                          ),
+                        ),
+                      ),
+                      if (_dueAt != null) ...[
+                        const SizedBox(width: 8),
+                        IconButton(
+                          tooltip: 'Clear due date',
+                          onPressed:
+                              _canModify
+                                  ? () => setState(() => _dueAt = null)
+                                  : null,
+                          icon: const Icon(Icons.close_rounded),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+              const SizedBox(height: 18),
               _TaskAttachmentsEditor(
                 urls: _attachmentUrls,
                 canEdit: _canModify && _isEditing,
@@ -745,30 +805,35 @@ class _TaskEditorSheetState extends ConsumerState<TaskEditorSheet> {
               if (!_isEditing) const SizedBox(height: 18),
               if (_isEditing) ...[
                 const SizedBox(height: 18),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 8,
+                _TaskEditorSection(
+                  title: 'Activity',
                   children: [
-                    _TaskInfoChip(
-                      icon: Icons.calendar_today_rounded,
-                      label:
-                          'Created ${_formatDateTime(widget.task!.createdAt)}',
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        _TaskInfoChip(
+                          icon: Icons.calendar_today_rounded,
+                          label:
+                              'Created ${_formatDateTime(widget.task!.createdAt)}',
+                        ),
+                        _TaskInfoChip(
+                          icon: Icons.update_rounded,
+                          label:
+                              'Updated ${_formatDateTime(widget.task!.updatedAt)}',
+                        ),
+                        if (createdBy != null)
+                          _TaskInfoChip(
+                            icon: Icons.person_add_alt_1_rounded,
+                            label: 'Created by $createdBy',
+                          ),
+                        if (updatedBy != null)
+                          _TaskInfoChip(
+                            icon: Icons.manage_accounts_rounded,
+                            label: 'Last updated by $updatedBy',
+                          ),
+                      ],
                     ),
-                    _TaskInfoChip(
-                      icon: Icons.update_rounded,
-                      label:
-                          'Updated ${_formatDateTime(widget.task!.updatedAt)}',
-                    ),
-                    if (createdBy != null)
-                      _TaskInfoChip(
-                        icon: Icons.person_add_alt_1_rounded,
-                        label: 'Created by $createdBy',
-                      ),
-                    if (updatedBy != null)
-                      _TaskInfoChip(
-                        icon: Icons.manage_accounts_rounded,
-                        label: 'Last updated by $updatedBy',
-                      ),
                   ],
                 ),
                 if (_canModify && kIsWeb) ...[
@@ -1084,6 +1149,41 @@ class _TaskAttachmentsEditor extends StatelessWidget {
   }
 }
 
+class _TaskEditorSection extends StatelessWidget {
+  const _TaskEditorSection({required this.title, required this.children});
+
+  final String title;
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        border: Border.all(color: colorScheme.outlineVariant),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              title,
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 12),
+            ...children,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _AttachmentPreview extends StatelessWidget {
   const _AttachmentPreview({
     required this.url,
@@ -1099,20 +1199,27 @@ class _AttachmentPreview extends StatelessWidget {
   Widget build(BuildContext context) {
     return Stack(
       children: [
-        ClipRRect(
-          borderRadius: BorderRadius.circular(12),
-          child: Image.network(
-            url,
-            width: 96,
-            height: 96,
-            fit: BoxFit.cover,
-            errorBuilder:
-                (context, error, stackTrace) => Container(
-                  width: 96,
-                  height: 96,
-                  color: Theme.of(context).colorScheme.surface,
-                  child: const Icon(Icons.broken_image_outlined),
-                ),
+        Tooltip(
+          message: 'Open image',
+          child: InkWell(
+            borderRadius: BorderRadius.circular(12),
+            onTap: () => _showAttachmentImage(context, url),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Image.network(
+                url,
+                width: 96,
+                height: 96,
+                fit: BoxFit.cover,
+                errorBuilder:
+                    (context, error, stackTrace) => Container(
+                      width: 96,
+                      height: 96,
+                      color: Theme.of(context).colorScheme.surface,
+                      child: const Icon(Icons.broken_image_outlined),
+                    ),
+              ),
+            ),
           ),
         ),
         if (canRemove)
@@ -1131,6 +1238,51 @@ class _AttachmentPreview extends StatelessWidget {
       ],
     );
   }
+}
+
+void _showAttachmentImage(BuildContext context, String url) {
+  showDialog<void>(
+    context: context,
+    builder:
+        (context) => Dialog.fullscreen(
+          backgroundColor: Colors.black,
+          child: Stack(
+            children: [
+              Positioned.fill(
+                child: InteractiveViewer(
+                  minScale: 0.5,
+                  maxScale: 5,
+                  child: Center(
+                    child: Image.network(
+                      url,
+                      fit: BoxFit.contain,
+                      errorBuilder:
+                          (context, error, stackTrace) => const Icon(
+                            Icons.broken_image_outlined,
+                            color: Colors.white,
+                            size: 48,
+                          ),
+                    ),
+                  ),
+                ),
+              ),
+              SafeArea(
+                child: Align(
+                  alignment: Alignment.topRight,
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: IconButton.filledTonal(
+                      tooltip: 'Close image',
+                      onPressed: () => Navigator.of(context).pop(),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+  );
 }
 
 class _TaskInfoChip extends StatelessWidget {

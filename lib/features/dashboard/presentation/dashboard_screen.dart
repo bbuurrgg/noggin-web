@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 
-import '../../../core/theme/app_theme.dart';
 import '../../../core/utils/friendly_error_message.dart';
 import '../../ai_control/presentation/ai_command_sheet.dart';
 import '../../auth/data/auth_providers.dart';
@@ -137,6 +136,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
     return Scaffold(
       extendBody: true,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       drawer:
           isWideLayout
               ? null
@@ -269,7 +269,9 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                     children: [
                       Expanded(child: content),
                       DecoratedBox(
-                        decoration: BoxDecoration(color: AppTheme.background),
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).scaffoldBackgroundColor,
+                        ),
                         child: SizedBox(
                           width: sideChatWidth,
                           child: _BoardChatSheet(
@@ -286,7 +288,14 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
           if (!isWideLayout) {
             return SafeArea(
-              child: Column(children: [topBar, Expanded(child: mainContent)]),
+              child: Column(
+                children: [
+                  topBar,
+                  Expanded(
+                    child: _DashboardWorkspaceSurface(child: mainContent),
+                  ),
+                ],
+              ),
             );
           }
 
@@ -358,7 +367,12 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               Expanded(
                 child: SafeArea(
                   child: Column(
-                    children: [topBar, Expanded(child: mainContent)],
+                    children: [
+                      topBar,
+                      Expanded(
+                        child: _DashboardWorkspaceSurface(child: mainContent),
+                      ),
+                    ],
                   ),
                 ),
               ),
@@ -421,7 +435,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      backgroundColor: Colors.white,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
@@ -434,7 +448,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      backgroundColor: Colors.white,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
@@ -447,7 +461,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      backgroundColor: Colors.white,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
@@ -490,7 +504,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
       context: context,
       isScrollControlled: true,
       showDragHandle: true,
-      backgroundColor: Colors.white,
+      backgroundColor: Theme.of(context).colorScheme.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
@@ -813,7 +827,9 @@ class _WorkspaceTopBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return DecoratedBox(
-      decoration: const BoxDecoration(color: AppTheme.background),
+      decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
+      ),
       child: SizedBox(
         height: 56,
         child: Row(
@@ -1723,6 +1739,14 @@ class _FocusedDashboardHome extends StatelessWidget {
       onOpenTask: onOpenTask,
       minHeight: 176,
     );
+    final upcomingDeadlinesSection = _UpcomingDeadlinesCard(
+      tasks: upcomingDeadlines.take(6).toList(),
+      boardNames: boardNames,
+      showBoardName: selectedBoardId == demoBoardId,
+      onOpenTask: onOpenTask,
+    );
+    final stayOnTrackSection = _StayOnTrackCard(tasks: dashboardTasks);
+    final calendarSection = _DashboardCalendarCard(tasks: dashboardTasks);
 
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 10, 16, 80),
@@ -1817,14 +1841,6 @@ class _FocusedDashboardHome extends StatelessWidget {
             if (constraints.maxWidth < 860) {
               return Column(
                 children: [
-                  myWorkSection,
-                  const SizedBox(height: 10),
-                  urgentSection,
-                  const SizedBox(height: 10),
-                  staleSection,
-                  const SizedBox(height: 10),
-                  needsDetailsSection,
-                  const SizedBox(height: 10),
                   _TodaysFocusCard(
                     tasks: focusTasks,
                     boardNames: boardNames,
@@ -1832,18 +1848,21 @@ class _FocusedDashboardHome extends StatelessWidget {
                     onOpenTask: onOpenTask,
                   ),
                   const SizedBox(height: 10),
+                  myWorkSection,
+                  const SizedBox(height: 10),
+                  urgentSection,
+                  const SizedBox(height: 10),
+                  upcomingDeadlinesSection,
+                  const SizedBox(height: 10),
                   recentSection,
                   const SizedBox(height: 10),
-                  _StayOnTrackCard(tasks: dashboardTasks),
+                  staleSection,
                   const SizedBox(height: 10),
-                  _DashboardCalendarCard(tasks: dashboardTasks),
+                  needsDetailsSection,
                   const SizedBox(height: 10),
-                  _UpcomingDeadlinesCard(
-                    tasks: upcomingDeadlines.take(6).toList(),
-                    boardNames: boardNames,
-                    showBoardName: selectedBoardId == demoBoardId,
-                    onOpenTask: onOpenTask,
-                  ),
+                  stayOnTrackSection,
+                  const SizedBox(height: 10),
+                  calendarSection,
                 ],
               );
             }
@@ -1855,13 +1874,18 @@ class _FocusedDashboardHome extends StatelessWidget {
                     flex: 5,
                     child: Column(
                       children: [
+                        _TodaysFocusCard(
+                          tasks: focusTasks,
+                          boardNames: boardNames,
+                          showBoardName: selectedBoardId == demoBoardId,
+                          onOpenTask: onOpenTask,
+                        ),
+                        const SizedBox(height: 10),
                         myWorkSection,
                         const SizedBox(height: 10),
                         urgentSection,
                         const SizedBox(height: 10),
-                        staleSection,
-                        const SizedBox(height: 10),
-                        needsDetailsSection,
+                        upcomingDeadlinesSection,
                       ],
                     ),
                   ),
@@ -1870,25 +1894,15 @@ class _FocusedDashboardHome extends StatelessWidget {
                     flex: 4,
                     child: Column(
                       children: [
-                        _TodaysFocusCard(
-                          tasks: focusTasks,
-                          boardNames: boardNames,
-                          showBoardName: selectedBoardId == demoBoardId,
-                          onOpenTask: onOpenTask,
-                        ),
-                        const SizedBox(height: 10),
                         recentSection,
                         const SizedBox(height: 10),
-                        _StayOnTrackCard(tasks: dashboardTasks),
+                        staleSection,
                         const SizedBox(height: 10),
-                        _DashboardCalendarCard(tasks: dashboardTasks),
+                        needsDetailsSection,
                         const SizedBox(height: 10),
-                        _UpcomingDeadlinesCard(
-                          tasks: upcomingDeadlines.take(6).toList(),
-                          boardNames: boardNames,
-                          showBoardName: selectedBoardId == demoBoardId,
-                          onOpenTask: onOpenTask,
-                        ),
+                        stayOnTrackSection,
+                        const SizedBox(height: 10),
+                        calendarSection,
                       ],
                     ),
                   ),
@@ -1902,9 +1916,27 @@ class _FocusedDashboardHome extends StatelessWidget {
                   flex: 5,
                   child: Column(
                     children: [
+                      _TodaysFocusCard(
+                        tasks: focusTasks,
+                        boardNames: boardNames,
+                        showBoardName: selectedBoardId == demoBoardId,
+                        onOpenTask: onOpenTask,
+                      ),
+                      const SizedBox(height: 10),
                       myWorkSection,
                       const SizedBox(height: 10),
                       urgentSection,
+                      const SizedBox(height: 10),
+                      upcomingDeadlinesSection,
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  flex: 4,
+                  child: Column(
+                    children: [
+                      recentSection,
                       const SizedBox(height: 10),
                       staleSection,
                       const SizedBox(height: 10),
@@ -1914,35 +1946,12 @@ class _FocusedDashboardHome extends StatelessWidget {
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  flex: 4,
-                  child: Column(
-                    children: [
-                      _TodaysFocusCard(
-                        tasks: focusTasks,
-                        boardNames: boardNames,
-                        showBoardName: selectedBoardId == demoBoardId,
-                        onOpenTask: onOpenTask,
-                      ),
-                      const SizedBox(height: 10),
-                      recentSection,
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
                   flex: 3,
                   child: Column(
                     children: [
-                      _StayOnTrackCard(tasks: dashboardTasks),
+                      stayOnTrackSection,
                       const SizedBox(height: 10),
-                      _DashboardCalendarCard(tasks: dashboardTasks),
-                      const SizedBox(height: 10),
-                      _UpcomingDeadlinesCard(
-                        tasks: upcomingDeadlines.take(6).toList(),
-                        boardNames: boardNames,
-                        showBoardName: selectedBoardId == demoBoardId,
-                        onOpenTask: onOpenTask,
-                      ),
+                      calendarSection,
                     ],
                   ),
                 ),
@@ -2169,6 +2178,22 @@ class _DashboardMetricItem extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _DashboardWorkspaceSurface extends StatelessWidget {
+  const _DashboardWorkspaceSurface({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+
+    return DecoratedBox(
+      decoration: BoxDecoration(color: theme.scaffoldBackgroundColor),
+      child: child,
     );
   }
 }
@@ -2456,6 +2481,7 @@ class _DashboardCalendarCard extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     final now = DateTime.now();
     final monthStart = DateTime(now.year, now.month);
+    final today = DateTime(now.year, now.month, now.day);
     final firstVisible = monthStart.subtract(
       Duration(days: monthStart.weekday % DateTime.daysPerWeek),
     );
@@ -2467,7 +2493,7 @@ class _DashboardCalendarCard extends StatelessWidget {
       if (dueAt == null || _isDone(task)) continue;
       final day = DateTime(dueAt.year, dueAt.month, dueAt.day);
       dueDays.add(day);
-      if (day.isBefore(DateTime(now.year, now.month, now.day))) {
+      if (day.isBefore(today)) {
         overdueDays.add(day);
       }
     }
@@ -2533,19 +2559,14 @@ class _DashboardCalendarCard extends StatelessWidget {
                         Duration(days: weekIndex * 7 + dayIndex),
                       );
                       final day = DateTime(date.year, date.month, date.day);
-                      final isCurrentMonth = date.month == now.month;
-                      final isToday =
-                          day == DateTime(now.year, now.month, now.day);
-                      final hasDueTask = dueDays.contains(day);
-                      final hasOverdueTask = overdueDays.contains(day);
 
                       return Expanded(
                         child: _CalendarDayCell(
                           day: date.day,
-                          muted: !isCurrentMonth,
-                          selected: isToday,
-                          hasDueTask: hasDueTask,
-                          overdue: hasOverdueTask,
+                          muted: date.month != now.month,
+                          selected: day == today,
+                          hasDueTask: dueDays.contains(day),
+                          overdue: overdueDays.contains(day),
                         ),
                       );
                     }),
@@ -3172,7 +3193,7 @@ class _NotificationsAction extends ConsumerWidget {
           () => showModalBottomSheet<void>(
             context: context,
             showDragHandle: true,
-            backgroundColor: Colors.white,
+            backgroundColor: Theme.of(context).colorScheme.surface,
             shape: const RoundedRectangleBorder(
               borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
             ),
@@ -4834,9 +4855,11 @@ class _BoardChatSheetState extends ConsumerState<_BoardChatSheet> {
         widget.fillAvailable
             ? DecoratedBox(
               decoration: BoxDecoration(
-                color: Colors.white,
+                color: Theme.of(context).colorScheme.surface,
                 borderRadius: BorderRadius.circular(28),
-                border: Border.all(color: const Color(0xFFE7E7EA)),
+                border: Border.all(
+                  color: Theme.of(context).colorScheme.outlineVariant,
+                ),
                 boxShadow: const [
                   BoxShadow(
                     color: Color(0x0A000000),

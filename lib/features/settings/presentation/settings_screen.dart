@@ -4,7 +4,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/config/google_drive_config.dart';
-import '../../../core/theme/app_theme.dart';
+import '../../../core/theme/theme_mode_controller.dart';
 import '../../../core/utils/friendly_error_message.dart';
 import '../../auth/data/auth_providers.dart';
 import '../../kanban/data/kanban_providers.dart';
@@ -92,6 +92,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
   Widget build(BuildContext context) {
     final user = ref.watch(currentUserProvider);
     final profileValue = ref.watch(currentUserProfileProvider);
+    final themeMode = ref.watch(themeModeControllerProvider);
     final colorScheme = Theme.of(context).colorScheme;
     final googleIdentity = user?.identities?.where(
       (identity) => identity.provider == OAuthProvider.google.name,
@@ -104,11 +105,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     final googleConnected = connectedIdentity != null;
 
     return Scaffold(
-      backgroundColor: AppTheme.background,
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       appBar: AppBar(
         title: const Text('Settings'),
         centerTitle: false,
-        backgroundColor: AppTheme.background,
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
         surfaceTintColor: Colors.transparent,
       ),
       body: SafeArea(
@@ -145,6 +146,24 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       onSave: _saveProfile,
                     );
                   },
+                ),
+              ],
+            ),
+            const SizedBox(height: 24),
+            _SettingsSection(
+              title: 'Appearance',
+              children: [
+                _SettingsTile(
+                  leading: Icons.dark_mode_outlined,
+                  title: 'Theme',
+                  subtitle: 'Choose how Noggin appears on this device.',
+                  trailing: _ThemeModeSelector(
+                    value: themeMode,
+                    onChanged:
+                        (mode) => ref
+                            .read(themeModeControllerProvider.notifier)
+                            .setThemeMode(mode),
+                  ),
                 ),
               ],
             ),
@@ -637,33 +656,77 @@ class _SettingsTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
 
-    return Row(
+    return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Icon(leading, color: colorScheme.primary),
-        const SizedBox(width: 14),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: Theme.of(
-                  context,
-                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700),
+        Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Icon(leading, color: colorScheme.primary),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    subtitle,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 4),
-              Text(
-                subtitle,
-                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                  color: colorScheme.onSurfaceVariant,
-                ),
-              ),
-            ],
-          ),
+            ),
+          ],
         ),
-        if (trailing != null) ...[const SizedBox(width: 12), trailing!],
+        if (trailing != null) ...[
+          const SizedBox(height: 14),
+          Padding(
+            padding: const EdgeInsets.only(left: 38),
+            child: Align(alignment: Alignment.centerLeft, child: trailing!),
+          ),
+        ],
       ],
+    );
+  }
+}
+
+class _ThemeModeSelector extends StatelessWidget {
+  const _ThemeModeSelector({required this.value, required this.onChanged});
+
+  final ThemeMode value;
+  final ValueChanged<ThemeMode> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return SegmentedButton<ThemeMode>(
+      showSelectedIcon: false,
+      segments: const [
+        ButtonSegment(
+          value: ThemeMode.system,
+          icon: Icon(Icons.brightness_auto_rounded, size: 18),
+          label: Text('System'),
+        ),
+        ButtonSegment(
+          value: ThemeMode.light,
+          icon: Icon(Icons.light_mode_rounded, size: 18),
+          label: Text('Light'),
+        ),
+        ButtonSegment(
+          value: ThemeMode.dark,
+          icon: Icon(Icons.dark_mode_rounded, size: 18),
+          label: Text('Dark'),
+        ),
+      ],
+      selected: {value},
+      onSelectionChanged: (selection) => onChanged(selection.single),
     );
   }
 }
