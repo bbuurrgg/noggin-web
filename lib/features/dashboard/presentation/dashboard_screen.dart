@@ -159,6 +159,10 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                   onDeleteBoard:
                       (board) => _showDeleteBoard(context, ref, board),
                   onAddBoard: () => _showAddBoard(context, ref),
+                  onAddTask: () {
+                    Navigator.pop(context);
+                    _showAddTask(context, selectedBoardId);
+                  },
                   onPendingInvites: () {
                     Navigator.pop(context);
                     _showPendingInvites(context);
@@ -175,6 +179,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                     Navigator.pop(context);
                     await ref.read(supabaseClientProvider).auth.signOut();
                   },
+                  canEditSelectedBoard: canEditSelectedBoard,
                 ),
               ),
       body: boardsValue.when(
@@ -349,6 +354,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                       onDeleteBoard:
                           (board) => _showDeleteBoard(context, ref, board),
                       onAddBoard: () => _showAddBoard(context, ref),
+                      onAddTask: () => _showAddTask(context, selectedBoardId),
                       onPendingInvites: () => _showPendingInvites(context),
                       onSettings:
                           () => Navigator.of(context).push(
@@ -360,6 +366,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                           () async =>
                               ref.read(supabaseClientProvider).auth.signOut(),
                       compact: !_workspaceDrawerExpandedContent,
+                      canEditSelectedBoard: canEditSelectedBoard,
                     ),
                   ),
                 ),
@@ -876,7 +883,7 @@ class _BoardTypeSelector extends StatelessWidget {
       segments: const [
         ButtonSegment<String>(
           value: 'project',
-          icon: Icon(Icons.timeline_rounded),
+          icon: Icon(Icons.account_tree_rounded),
           label: Text('Project'),
         ),
         ButtonSegment<String>(
@@ -904,9 +911,11 @@ class _WorkspaceDrawerContent extends StatefulWidget {
     required this.onLeaveBoard,
     required this.onDeleteBoard,
     required this.onAddBoard,
+    required this.onAddTask,
     required this.onPendingInvites,
     required this.onSettings,
     required this.onSignOut,
+    required this.canEditSelectedBoard,
     this.compact = false,
   });
 
@@ -921,9 +930,11 @@ class _WorkspaceDrawerContent extends StatefulWidget {
   final ValueChanged<KanbanBoard> onLeaveBoard;
   final ValueChanged<KanbanBoard> onDeleteBoard;
   final VoidCallback onAddBoard;
+  final VoidCallback onAddTask;
   final VoidCallback onPendingInvites;
   final VoidCallback onSettings;
   final Future<void> Function() onSignOut;
+  final bool canEditSelectedBoard;
   final bool compact;
 
   @override
@@ -1024,6 +1035,13 @@ class _WorkspaceDrawerContentState extends State<_WorkspaceDrawerContent> {
                 ),
               ),
             ),
+          ),
+          _SelectedBoardActionCard(
+            boardsValue: widget.boardsValue,
+            selectedBoardId: widget.selectedBoardId,
+            canEditSelectedBoard: widget.canEditSelectedBoard,
+            onAddTask: widget.onAddTask,
+            onRenameBoard: widget.onRenameBoard,
           ),
           Expanded(
             child: widget.boardsValue.when(
@@ -1320,7 +1338,7 @@ class _BoardRailButton extends StatelessWidget {
                   ? Icons.apps_rounded
                   : board.isList
                   ? Icons.list_alt_rounded
-                  : Icons.timeline_rounded,
+                  : Icons.account_tree_rounded,
               color:
                   selected
                       ? colorScheme.onPrimaryContainer
@@ -1420,6 +1438,88 @@ class _DrawerIconButton extends StatelessWidget {
               child: _NotificationDot(count: badge!),
             ),
         ],
+      ),
+    );
+  }
+}
+
+class _SelectedBoardActionCard extends StatelessWidget {
+  const _SelectedBoardActionCard({
+    required this.boardsValue,
+    required this.selectedBoardId,
+    required this.canEditSelectedBoard,
+    required this.onAddTask,
+    required this.onRenameBoard,
+  });
+
+  final AsyncValue<List<KanbanBoard>> boardsValue;
+  final String selectedBoardId;
+  final bool canEditSelectedBoard;
+  final VoidCallback onAddTask;
+  final ValueChanged<KanbanBoard> onRenameBoard;
+
+  @override
+  Widget build(BuildContext context) {
+    final selectedBoard = boardsValue.maybeWhen(
+      data:
+          (boards) => boards.cast<KanbanBoard?>().firstWhere(
+            (board) => board?.id == selectedBoardId,
+            orElse: () => null,
+          ),
+      orElse: () => null,
+    );
+    if (selectedBoard == null ||
+        selectedBoard.id == demoBoardId ||
+        !canEditSelectedBoard) {
+      return const SizedBox.shrink();
+    }
+
+    final colorScheme = Theme.of(context).colorScheme;
+    final isList = selectedBoard.isList;
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: colorScheme.surface,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: colorScheme.outlineVariant),
+        ),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 8, 8, 8),
+          child: Row(
+            children: [
+              Icon(
+                isList ? Icons.list_alt_rounded : Icons.account_tree_rounded,
+                size: 20,
+                color: colorScheme.primary,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  selectedBoard.name,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelLarge?.copyWith(fontWeight: FontWeight.w800),
+                ),
+              ),
+              IconButton(
+                tooltip: 'Add task',
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.add_task_rounded, size: 20),
+                onPressed: onAddTask,
+              ),
+              IconButton(
+                tooltip: 'Rename',
+                visualDensity: VisualDensity.compact,
+                icon: const Icon(Icons.edit_rounded, size: 20),
+                onPressed: () => onRenameBoard(selectedBoard),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -2941,7 +3041,7 @@ class _BoardListTile extends ConsumerWidget {
     final roleLabel = access == null ? 'Shared' : _roleLabel(access);
 
     return _CompactDrawerRow(
-      icon: board.isList ? Icons.list_alt_rounded : Icons.timeline_rounded,
+      icon: board.isList ? Icons.list_alt_rounded : Icons.account_tree_rounded,
       title: board.name,
       selected: selected,
       onTap: onSelect,
