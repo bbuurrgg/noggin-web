@@ -72,6 +72,9 @@ class GemmaRuntime {
     return switch (response) {
       TextResponse(:final token) => token,
       FunctionCallResponse(:final args) => jsonEncode(args),
+      ParallelFunctionCallResponse(:final calls) => jsonEncode(
+        calls.map((call) => {'name': call.name, 'args': call.args}).toList(),
+      ),
       ThinkingResponse(:final content) => content,
     };
   }

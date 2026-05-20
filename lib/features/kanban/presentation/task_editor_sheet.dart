@@ -1,14 +1,15 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 
+import '../../../core/config/feature_flags.dart';
+import '../../../core/utils/debug_rebuild_counter.dart';
+import '../../../core/utils/friendly_error_message.dart';
 import '../../ai_control/data/ai_control_providers.dart';
 import '../../ai_control/data/on_device_llm_task_command_service.dart';
 import '../../ai_control/domain/ai_task_command.dart';
 import '../../auth/data/auth_providers.dart';
-import '../../../core/utils/friendly_error_message.dart';
 import '../data/kanban_providers.dart';
 import '../domain/kanban_repository.dart';
 import '../domain/kanban_task.dart';
@@ -134,7 +135,7 @@ class _TaskEditorSheetState extends ConsumerState<TaskEditorSheet> {
         dueAt: _dueAt,
       );
     }
-    invalidateBoard(ref, widget.boardId);
+    invalidateBoardTaskSideEffects(ref, widget.boardId);
 
     if (mounted) {
       Navigator.of(context).pop();
@@ -227,7 +228,7 @@ class _TaskEditorSheetState extends ConsumerState<TaskEditorSheet> {
     setState(() => _deleting = true);
     try {
       await ref.read(kanbanRepositoryProvider).deleteTask(task.id);
-      invalidateBoard(ref, widget.boardId);
+      invalidateBoardTaskSideEffects(ref, widget.boardId);
       if (mounted) {
         Navigator.of(context).pop();
       }
@@ -296,7 +297,7 @@ class _TaskEditorSheetState extends ConsumerState<TaskEditorSheet> {
         return;
       }
       setState(() => _attachmentUrls = nextUrls);
-      invalidateBoard(ref, widget.boardId);
+      invalidateBoardTaskSideEffects(ref, widget.boardId);
     } catch (error) {
       if (mounted) {
         _showMessage(
@@ -322,7 +323,7 @@ class _TaskEditorSheetState extends ConsumerState<TaskEditorSheet> {
     await ref
         .read(kanbanRepositoryProvider)
         .updateTask(taskId: task.id, attachmentUrls: nextUrls);
-    invalidateBoard(ref, widget.boardId);
+    invalidateBoardTaskSideEffects(ref, widget.boardId);
   }
 
   Future<void> _runAiOnTask() async {
@@ -395,7 +396,7 @@ class _TaskEditorSheetState extends ConsumerState<TaskEditorSheet> {
           break;
         case AiTaskCommandType.delete:
           await ref.read(kanbanRepositoryProvider).deleteTask(task.id);
-          invalidateBoard(ref, widget.boardId);
+          invalidateBoardTaskSideEffects(ref, widget.boardId);
           if (mounted) Navigator.of(context).pop();
           break;
         case AiTaskCommandType.createBoard:
@@ -556,6 +557,11 @@ class _TaskEditorSheetState extends ConsumerState<TaskEditorSheet> {
 
   @override
   Widget build(BuildContext context) {
+    DebugRebuildCounter.mark(
+      'TaskEditorSheet:${widget.task?.id ?? 'new'}',
+      logEvery: 5,
+    );
+
     final stages = ref.watch(stagesProvider(widget.boardId)).value ?? [];
     final statusOptions =
         {_status, ...stages.map((stage) => stage.name)}.toList();
@@ -836,21 +842,7 @@ class _TaskEditorSheetState extends ConsumerState<TaskEditorSheet> {
                     ),
                   ],
                 ),
-                if (_canModify && kIsWeb) ...[
-                  const SizedBox(height: 18),
-                  DecoratedBox(
-                    decoration: BoxDecoration(
-                      color: Color(0xFFFFF4D8),
-                      borderRadius: BorderRadius.all(Radius.circular(18)),
-                    ),
-                    child: Padding(
-                      padding: EdgeInsets.all(12),
-                      child: Text(
-                        'Web preview: local model selection is not available here yet. Slash commands like /move Done and /delete still work from the AI Assistant.',
-                      ),
-                    ),
-                  ),
-                ] else if (_canModify) ...[
+                if (_canModify && FeatureFlags.offlineAiEnabled) ...[
                   const SizedBox(height: 18),
                   TextField(
                     controller: _aiController,

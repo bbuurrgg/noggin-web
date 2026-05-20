@@ -1,7 +1,14 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart'
-    show FutureProvider, Provider, StateProvider, StreamProvider, WidgetRef;
+    show
+        AsyncValue,
+        AsyncValueX,
+        FutureProvider,
+        Provider,
+        StateProvider,
+        StreamProvider,
+        WidgetRef;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../auth/data/auth_providers.dart';
@@ -19,17 +26,57 @@ final kanbanRepositoryProvider = Provider<KanbanRepository>((ref) {
   return ref.watch(supabaseKanbanRepositoryProvider);
 });
 
-final tasksForStatusProvider = StreamProvider.autoDispose
-    .family<List<KanbanTask>, TasksForStatusRequest>((ref, request) {
-      return ref
-          .watch(kanbanRepositoryProvider)
-          .watchTasks(request.boardId)
-          .map(
-            (tasks) =>
-                tasks.where((task) => task.status == request.status).toList()
-                  ..sort(TaskPriority.compareTasks),
+final tasksForStatusProvider = Provider.autoDispose
+    .family<AsyncValue<List<KanbanTask>>, TasksForStatusRequest>((
+      ref,
+      request,
+    ) {
+      final statusTasks = ref.watch(
+        boardTasksProvider(request.boardId).select((tasksValue) {
+          return tasksValue.when(
+            data:
+                (tasks) => AsyncValue.data(
+                  _TasksForStatusSnapshot.fromTasks(tasks, request.status),
+                ),
+            loading: () => const AsyncValue<_TasksForStatusSnapshot>.loading(),
+            error: AsyncValue<_TasksForStatusSnapshot>.error,
           );
+        }),
+      );
+
+      return statusTasks.when(
+        data: (snapshot) => AsyncValue.data(snapshot.tasks),
+        loading: () => const AsyncValue.loading(),
+        error: AsyncValue.error,
+      );
     });
+
+final taskByIdProvider = Provider.autoDispose
+    .family<AsyncValue<KanbanTask?>, TaskByIdRequest>((ref, request) {
+      final selection = ref.watch(
+        boardTasksProvider(request.boardId).select((tasksValue) {
+          return tasksValue.when(
+            data:
+                (tasks) => _TaskByIdSelection.data(
+                  _TaskByIdSnapshot.fromTasks(tasks, request.taskId),
+                ),
+            loading: _TaskByIdSelection.loading,
+            error: _TaskByIdSelection.error,
+          );
+        }),
+      );
+
+      return selection.toAsyncValue();
+    });
+
+KanbanTask? _taskById(List<KanbanTask> tasks, String taskId) {
+  for (final task in tasks) {
+    if (task.id == taskId) {
+      return task;
+    }
+  }
+  return null;
+}
 
 final allTasksProvider = StreamProvider.autoDispose<List<KanbanTask>>((ref) {
   return ref.watch(kanbanRepositoryProvider).watchTasks(demoBoardId);
@@ -72,14 +119,14 @@ final canEditBoardProvider = FutureProvider.autoDispose.family<bool, String>((
     return true;
   }
 
-  final user = ref.watch(currentUserProvider);
-  if (user == null) {
+  final userId = ref.watch(currentUserIdProvider);
+  if (userId == null) {
     return false;
   }
 
   final members = await ref.watch(boardMembersProvider(boardId).future);
   for (final member in members) {
-    if (member.userId == user.id) {
+    if (member.userId == userId) {
       return member.canEdit;
     }
   }
@@ -88,17 +135,18 @@ final canEditBoardProvider = FutureProvider.autoDispose.family<bool, String>((
 
 final boardAccessProvider = FutureProvider.autoDispose
     .family<KanbanBoardMember?, String>((ref, boardId) async {
-      final user = ref.watch(currentUserProvider);
-      if (user == null) {
+      final userId = ref.watch(currentUserIdProvider);
+      if (userId == null) {
         return null;
       }
 
       if (boardId == demoBoardId) {
+        final user = ref.watch(supabaseClientProvider).auth.currentUser;
         return KanbanBoardMember(
-          userId: user.id,
-          email: user.email ?? 'Signed-in user',
+          userId: userId,
+          email: user?.email ?? 'Signed-in user',
           username: null,
-          displayName: user.email ?? 'Signed-in user',
+          displayName: user?.email ?? 'Signed-in user',
           avatarUrl: null,
           role: 'owner',
           createdAt: DateTime.now(),
@@ -108,7 +156,7 @@ final boardAccessProvider = FutureProvider.autoDispose
 
       final members = await ref.watch(boardMembersProvider(boardId).future);
       for (final member in members) {
-        if (member.userId == user.id) {
+        if (member.userId == userId) {
           return member;
         }
       }
@@ -213,13 +261,21 @@ void invalidateBoardList(WidgetRef ref) {
 void invalidateBoard(WidgetRef ref, String boardId) {
   ref.invalidate(allTasksProvider);
   ref.invalidate(stagesProvider(boardId));
-  ref.invalidate(tasksForStatusProvider);
-  ref.invalidate(boardMembersProvider(boardId));
-  ref.invalidate(boardInvitesProvider(boardId));
   ref.invalidate(boardActivityProvider(boardId));
   ref.invalidate(boardMessagesProvider(boardId));
   ref.invalidate(boardMessageReactionsProvider(boardId));
   ref.invalidate(notificationsProvider);
+}
+
+void invalidateBoardTaskSideEffects(WidgetRef ref, String boardId) {
+  ref.invalidate(allTasksProvider);
+  ref.invalidate(boardActivityProvider(boardId));
+  ref.invalidate(notificationsProvider);
+}
+
+void invalidateBoardCollaboration(WidgetRef ref, String boardId) {
+  ref.invalidate(boardMembersProvider(boardId));
+  ref.invalidate(boardInvitesProvider(boardId));
   ref.invalidate(boardAccessProvider(boardId));
   ref.invalidate(canEditBoardProvider(boardId));
 }
@@ -246,4 +302,282 @@ class TasksForStatusRequest {
 
   @override
   int get hashCode => Object.hash(boardId, status);
+}
+
+class TaskByIdRequest {
+  const TaskByIdRequest({required this.boardId, required this.taskId});
+
+  final String boardId;
+  final String taskId;
+
+  @override
+  bool operator ==(Object other) {
+    return other is TaskByIdRequest &&
+        other.boardId == boardId &&
+        other.taskId == taskId;
+  }
+
+  @override
+  int get hashCode => Object.hash(boardId, taskId);
+}
+
+class _TasksForStatusSnapshot {
+  _TasksForStatusSnapshot._(this.tasks, this._signature);
+
+  factory _TasksForStatusSnapshot.fromTasks(
+    List<KanbanTask> allTasks,
+    String status,
+  ) {
+    final tasks =
+        allTasks.where((task) => task.status == status).toList()
+          ..sort(TaskPriority.compareTasks);
+
+    return _TasksForStatusSnapshot._(
+      tasks,
+      tasks.map(_TaskSignature.fromTask).toList(),
+    );
+  }
+
+  final List<KanbanTask> tasks;
+  final List<_TaskSignature> _signature;
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) {
+      return true;
+    }
+    if (other is! _TasksForStatusSnapshot ||
+        other._signature.length != _signature.length) {
+      return false;
+    }
+    for (var index = 0; index < _signature.length; index++) {
+      if (_signature[index] != other._signature[index]) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  @override
+  int get hashCode => Object.hashAll(_signature);
+}
+
+class _TaskByIdSnapshot {
+  _TaskByIdSnapshot._(this.task, this._signature);
+
+  factory _TaskByIdSnapshot.fromTasks(List<KanbanTask> tasks, String taskId) {
+    final task = _taskById(tasks, taskId);
+    return _TaskByIdSnapshot._(
+      task,
+      task == null ? null : _TaskCardSignature.fromTask(task),
+    );
+  }
+
+  final KanbanTask? task;
+  final _TaskCardSignature? _signature;
+
+  @override
+  bool operator ==(Object other) {
+    return other is _TaskByIdSnapshot && other._signature == _signature;
+  }
+
+  @override
+  int get hashCode => _signature.hashCode;
+}
+
+class _TaskByIdSelection {
+  const _TaskByIdSelection._({
+    required this.state,
+    this.snapshot,
+    this.error,
+    this.stackTrace,
+  });
+
+  factory _TaskByIdSelection.data(_TaskByIdSnapshot snapshot) {
+    return _TaskByIdSelection._(
+      state: _TaskByIdSelectionState.data,
+      snapshot: snapshot,
+    );
+  }
+
+  factory _TaskByIdSelection.loading() {
+    return const _TaskByIdSelection._(state: _TaskByIdSelectionState.loading);
+  }
+
+  factory _TaskByIdSelection.error(Object error, StackTrace stackTrace) {
+    return _TaskByIdSelection._(
+      state: _TaskByIdSelectionState.error,
+      error: error,
+      stackTrace: stackTrace,
+    );
+  }
+
+  final _TaskByIdSelectionState state;
+  final _TaskByIdSnapshot? snapshot;
+  final Object? error;
+  final StackTrace? stackTrace;
+
+  AsyncValue<KanbanTask?> toAsyncValue() {
+    return switch (state) {
+      _TaskByIdSelectionState.data => AsyncValue.data(snapshot?.task),
+      _TaskByIdSelectionState.loading => const AsyncValue.loading(),
+      _TaskByIdSelectionState.error => AsyncValue.error(error!, stackTrace!),
+    };
+  }
+
+  @override
+  bool operator ==(Object other) {
+    return other is _TaskByIdSelection &&
+        other.state == state &&
+        other.snapshot == snapshot &&
+        other.error == error;
+  }
+
+  @override
+  int get hashCode => Object.hash(state, snapshot, error);
+}
+
+enum _TaskByIdSelectionState { data, loading, error }
+
+class _TaskSignature {
+  const _TaskSignature({
+    required this.id,
+    required this.title,
+    required this.description,
+    required this.status,
+    required this.priority,
+    required this.sortOrder,
+    required this.updatedAt,
+    required this.assigneeId,
+    required this.dueAt,
+    required this.attachmentUrls,
+  });
+
+  factory _TaskSignature.fromTask(KanbanTask task) {
+    return _TaskSignature(
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      status: task.status,
+      priority: task.priority,
+      sortOrder: task.sortOrder,
+      updatedAt: task.updatedAt,
+      assigneeId: task.assigneeId,
+      dueAt: task.dueAt,
+      attachmentUrls: Object.hashAll(task.attachmentUrls),
+    );
+  }
+
+  final String id;
+  final String title;
+  final String? description;
+  final String status;
+  final String priority;
+  final int sortOrder;
+  final DateTime updatedAt;
+  final String? assigneeId;
+  final DateTime? dueAt;
+  final int attachmentUrls;
+
+  @override
+  bool operator ==(Object other) {
+    return other is _TaskSignature &&
+        other.id == id &&
+        other.title == title &&
+        other.description == description &&
+        other.status == status &&
+        other.priority == priority &&
+        other.sortOrder == sortOrder &&
+        other.updatedAt == updatedAt &&
+        other.assigneeId == assigneeId &&
+        other.dueAt == dueAt &&
+        other.attachmentUrls == attachmentUrls;
+  }
+
+  @override
+  int get hashCode {
+    return Object.hash(
+      id,
+      title,
+      description,
+      status,
+      priority,
+      sortOrder,
+      updatedAt,
+      assigneeId,
+      dueAt,
+      attachmentUrls,
+    );
+  }
+}
+
+class _TaskCardSignature {
+  const _TaskCardSignature({
+    required this.id,
+    required this.title,
+    required this.description,
+    required this.status,
+    required this.priority,
+    required this.updatedDay,
+    required this.assigneeId,
+    required this.dueAt,
+    required this.attachmentUrls,
+  });
+
+  factory _TaskCardSignature.fromTask(KanbanTask task) {
+    return _TaskCardSignature(
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      status: task.status,
+      priority: task.priority,
+      updatedDay: DateTime(
+        task.updatedAt.year,
+        task.updatedAt.month,
+        task.updatedAt.day,
+      ),
+      assigneeId: task.assigneeId,
+      dueAt: task.dueAt,
+      attachmentUrls: Object.hashAll(task.attachmentUrls),
+    );
+  }
+
+  final String id;
+  final String title;
+  final String? description;
+  final String status;
+  final String priority;
+  final DateTime updatedDay;
+  final String? assigneeId;
+  final DateTime? dueAt;
+  final int attachmentUrls;
+
+  @override
+  bool operator ==(Object other) {
+    return other is _TaskCardSignature &&
+        other.id == id &&
+        other.title == title &&
+        other.description == description &&
+        other.status == status &&
+        other.priority == priority &&
+        other.updatedDay == updatedDay &&
+        other.assigneeId == assigneeId &&
+        other.dueAt == dueAt &&
+        other.attachmentUrls == attachmentUrls;
+  }
+
+  @override
+  int get hashCode {
+    return Object.hash(
+      id,
+      title,
+      description,
+      status,
+      priority,
+      updatedDay,
+      assigneeId,
+      dueAt,
+      attachmentUrls,
+    );
+  }
 }

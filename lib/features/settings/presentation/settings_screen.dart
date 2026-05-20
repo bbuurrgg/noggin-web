@@ -5,6 +5,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/config/google_drive_config.dart';
 import '../../../core/theme/theme_mode_controller.dart';
+import '../../../core/utils/avatar_image_cache.dart';
 import '../../../core/utils/friendly_error_message.dart';
 import '../../auth/data/auth_providers.dart';
 import '../../kanban/data/kanban_providers.dart';
@@ -324,6 +325,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
     if (user == null || _uploadingAvatar) {
       return;
     }
+    final previousAvatarUrl =
+        ref.read(currentUserProfileProvider).valueOrNull?.avatarUrl;
 
     final result = await FilePicker.platform.pickFiles(
       type: FileType.image,
@@ -373,6 +376,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
           .update({'avatar_url': avatarUrl})
           .eq('user_id', user.id);
 
+      AvatarImageCache.evict(previousAvatarUrl);
       ref.invalidate(currentUserProfileProvider);
       ref.invalidate(boardMembersProvider);
 
@@ -499,10 +503,7 @@ class _ProfileForm extends StatelessWidget {
                 CircleAvatar(
                   radius: 28,
                   backgroundColor: colorScheme.primaryContainer,
-                  backgroundImage:
-                      avatarUrl == null || avatarUrl!.isEmpty
-                          ? null
-                          : NetworkImage(avatarUrl!),
+                  backgroundImage: AvatarImageCache.provider(avatarUrl),
                   child:
                       avatarUrl == null || avatarUrl!.isEmpty
                           ? Icon(

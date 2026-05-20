@@ -17,6 +17,7 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isSignUp = false;
+  bool _passwordVisible = false;
   bool _submitting = false;
 
   @override
@@ -178,11 +179,26 @@ class _AuthScreenState extends ConsumerState<AuthScreen> {
                   const SizedBox(height: 12),
                   TextField(
                     controller: _passwordController,
-                    obscureText: true,
+                    obscureText: !_passwordVisible,
                     textInputAction: TextInputAction.done,
                     autofillHints: const [AutofillHints.password],
                     decoration: InputDecoration(
                       labelText: 'Password',
+                      suffixIcon: IconButton(
+                        tooltip:
+                            _passwordVisible
+                                ? 'Hide password'
+                                : 'Show password',
+                        icon: Icon(
+                          _passwordVisible
+                              ? Icons.visibility_off_rounded
+                              : Icons.visibility_rounded,
+                        ),
+                        onPressed:
+                            () => setState(
+                              () => _passwordVisible = !_passwordVisible,
+                            ),
+                      ),
                       filled: true,
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(16),

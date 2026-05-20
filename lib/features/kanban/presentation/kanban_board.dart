@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
+import '../../../core/utils/avatar_image_cache.dart';
+import '../../../core/utils/debug_rebuild_counter.dart';
 import '../../../core/utils/friendly_error_message.dart';
 import '../../drive_links/data/drive_link_providers.dart';
 import '../../drive_links/data/google_drive_url_parser.dart';
@@ -10,6 +12,8 @@ import '../../drive_links/presentation/drive_link_preview_block.dart';
 import '../data/kanban_providers.dart';
 import '../domain/kanban_task.dart';
 import 'task_editor_sheet.dart';
+
+const _unassignedAssigneeFilter = '__unassigned__';
 
 class KanbanBoardView extends ConsumerStatefulWidget {
   const KanbanBoardView({
@@ -27,6 +31,7 @@ class KanbanBoardView extends ConsumerStatefulWidget {
 
 class _KanbanBoardViewState extends ConsumerState<KanbanBoardView> {
   List<KanbanStage>? _optimisticStages;
+  String? _assigneeFilter;
   final _stageScrollController = ScrollController();
 
   @override
@@ -40,122 +45,140 @@ class _KanbanBoardViewState extends ConsumerState<KanbanBoardView> {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.boardId != widget.boardId) {
       _optimisticStages = null;
+      _assigneeFilter = null;
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    DebugRebuildCounter.mark('KanbanBoardView:${widget.boardId}');
+
     if (widget.boardId == demoBoardId) {
       return const _AllTasksByBoard();
     }
 
     final stagesValue = ref.watch(stagesProvider(widget.boardId));
+    final members = ref.watch(boardMembersProvider(widget.boardId)).valueOrNull;
 
     return stagesValue.when(
       data: (stages) {
         final displayedStages = _optimisticStages ?? stages;
-        return Listener(
-          onPointerSignal: (event) {
-            if (event is! PointerScrollEvent ||
-                !_stageScrollController.hasClients) {
-              return;
-            }
-
-            final position = _stageScrollController.position;
-            final nextOffset =
-                (_stageScrollController.offset + event.scrollDelta.dy)
-                    .clamp(position.minScrollExtent, position.maxScrollExtent)
-                    .toDouble();
-            _stageScrollController.jumpTo(nextOffset);
-          },
-          child: ScrollConfiguration(
-            behavior: ScrollConfiguration.of(context).copyWith(
-              dragDevices: {
-                PointerDeviceKind.touch,
-                PointerDeviceKind.mouse,
-                PointerDeviceKind.trackpad,
-              },
+        return Column(
+          children: [
+            _AssigneeFilterBar(
+              members: members ?? const [],
+              selectedValue: _assigneeFilter,
+              onChanged: (value) => setState(() => _assigneeFilter = value),
             ),
-            child: Scrollbar(
-              controller: _stageScrollController,
-              thumbVisibility: true,
-              child: ReorderableListView.builder(
-                scrollController: _stageScrollController,
-                scrollDirection: Axis.horizontal,
-                buildDefaultDragHandles: false,
-                padding: const EdgeInsets.fromLTRB(18, 0, 18, 96),
-                itemCount: displayedStages.length,
-                proxyDecorator: (child, index, animation) => child,
-                onReorder: (oldIndex, newIndex) async {
-                  if (!widget.canEdit) {
+            Expanded(
+              child: Listener(
+                onPointerSignal: (event) {
+                  if (event is! PointerScrollEvent ||
+                      !_stageScrollController.hasClients) {
                     return;
                   }
-                  if (oldIndex < 0 ||
-                      oldIndex >= displayedStages.length ||
-                      newIndex < 0 ||
-                      newIndex > displayedStages.length) {
-                    return;
-                  }
-                  final items = List<KanbanStage>.from(displayedStages);
-                  if (oldIndex < newIndex) newIndex -= 1;
-                  final item = items.removeAt(oldIndex);
-                  items.insert(newIndex, item);
-                  setState(() => _optimisticStages = items);
-                  try {
-                    await ref
-                        .read(kanbanRepositoryProvider)
-                        .reorderStages(items.map((s) => s.id).toList());
-                    await Future<void>.delayed(
-                      const Duration(milliseconds: 250),
-                    );
-                    if (!mounted) {
-                      return;
-                    }
-                    setState(() => _optimisticStages = null);
-                    invalidateBoard(ref, widget.boardId);
-                  } catch (error) {
-                    if (!context.mounted) {
-                      return;
-                    }
-                    setState(() => _optimisticStages = null);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          friendlyErrorMessage(
-                            error,
-                            fallback: 'Could not move that stage.',
+
+                  final position = _stageScrollController.position;
+                  final nextOffset =
+                      (_stageScrollController.offset + event.scrollDelta.dy)
+                          .clamp(
+                            position.minScrollExtent,
+                            position.maxScrollExtent,
+                          )
+                          .toDouble();
+                  _stageScrollController.jumpTo(nextOffset);
+                },
+                child: ScrollConfiguration(
+                  behavior: ScrollConfiguration.of(context).copyWith(
+                    dragDevices: {
+                      PointerDeviceKind.touch,
+                      PointerDeviceKind.mouse,
+                      PointerDeviceKind.trackpad,
+                    },
+                  ),
+                  child: Scrollbar(
+                    controller: _stageScrollController,
+                    thumbVisibility: true,
+                    child: ReorderableListView.builder(
+                      scrollController: _stageScrollController,
+                      scrollDirection: Axis.horizontal,
+                      buildDefaultDragHandles: false,
+                      padding: const EdgeInsets.fromLTRB(18, 0, 18, 96),
+                      itemCount: displayedStages.length,
+                      proxyDecorator: (child, index, animation) => child,
+                      onReorderItem: (oldIndex, newIndex) async {
+                        if (!widget.canEdit) {
+                          return;
+                        }
+                        if (oldIndex < 0 ||
+                            oldIndex >= displayedStages.length ||
+                            newIndex < 0 ||
+                            newIndex > displayedStages.length) {
+                          return;
+                        }
+                        final items = List<KanbanStage>.from(displayedStages);
+                        final item = items.removeAt(oldIndex);
+                        items.insert(newIndex, item);
+                        setState(() => _optimisticStages = items);
+                        try {
+                          await ref
+                              .read(kanbanRepositoryProvider)
+                              .reorderStages(items.map((s) => s.id).toList());
+                          await Future<void>.delayed(
+                            const Duration(milliseconds: 250),
+                          );
+                          if (!mounted) {
+                            return;
+                          }
+                          setState(() => _optimisticStages = null);
+                          invalidateBoard(ref, widget.boardId);
+                        } catch (error) {
+                          if (!context.mounted) {
+                            return;
+                          }
+                          setState(() => _optimisticStages = null);
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text(
+                                friendlyErrorMessage(
+                                  error,
+                                  fallback: 'Could not move that stage.',
+                                ),
+                              ),
+                            ),
+                          );
+                        }
+                      },
+                      itemBuilder: (context, index) {
+                        final stage = displayedStages[index];
+                        return Padding(
+                          key: ValueKey(stage.id),
+                          padding: const EdgeInsets.only(right: 14),
+                          child: SizedBox(
+                            width: 312,
+                            child: _KanbanColumn(
+                              boardId: widget.boardId,
+                              canEdit: widget.canEdit,
+                              reorderIndex: index,
+                              stage: stage,
+                              assigneeFilter: _assigneeFilter,
+                            ),
                           ),
-                        ),
-                      ),
-                    );
-                  }
-                },
-                itemBuilder: (context, index) {
-                  final stage = displayedStages[index];
-                  return Padding(
-                    key: ValueKey(stage.id),
-                    padding: const EdgeInsets.only(right: 14),
-                    child: SizedBox(
-                      width: 312,
-                      child: _KanbanColumn(
-                        boardId: widget.boardId,
-                        canEdit: widget.canEdit,
-                        reorderIndex: index,
-                        stage: stage,
-                      ),
+                        );
+                      },
+                      footer:
+                          widget.boardId == demoBoardId || !widget.canEdit
+                              ? null
+                              : _AddStageButton(
+                                key: ValueKey('add-stage-${widget.boardId}'),
+                                boardId: widget.boardId,
+                              ),
                     ),
-                  );
-                },
-                footer:
-                    widget.boardId == demoBoardId || !widget.canEdit
-                        ? null
-                        : _AddStageButton(
-                          key: ValueKey('add-stage-${widget.boardId}'),
-                          boardId: widget.boardId,
-                        ),
+                  ),
+                ),
               ),
             ),
-          ),
+          ],
         );
       },
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -166,6 +189,110 @@ class _KanbanBoardViewState extends ConsumerState<KanbanBoardView> {
             ),
           ),
     );
+  }
+}
+
+class _AssigneeFilterBar extends StatelessWidget {
+  const _AssigneeFilterBar({
+    required this.members,
+    required this.selectedValue,
+    required this.onChanged,
+  });
+
+  final List<KanbanBoardMember> members;
+  final String? selectedValue;
+  final ValueChanged<String?> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    DebugRebuildCounter.mark('AssigneeFilterBar');
+
+    final colorScheme = Theme.of(context).colorScheme;
+    final sortedMembers = [...members]
+      ..sort((a, b) => a.displayLabel.compareTo(b.displayLabel));
+
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 600;
+        return SizedBox(
+          height: 58,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.fromLTRB(18, 8, 18, 8),
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: Center(
+                  child: Icon(
+                    Icons.filter_list_rounded,
+                    size: 20,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: ChoiceChip(
+                  label: const Text('All'),
+                  selected: selectedValue == null,
+                  onSelected: (_) => onChanged(null),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: Tooltip(
+                  message: 'Unassigned',
+                  child: ChoiceChip(
+                    avatar: const Icon(Icons.person_off_rounded, size: 18),
+                    label:
+                        compact
+                            ? const SizedBox.shrink()
+                            : const Text('Unassigned'),
+                    selected: selectedValue == _unassignedAssigneeFilter,
+                    onSelected: (_) => onChanged(_unassignedAssigneeFilter),
+                  ),
+                ),
+              ),
+              ...sortedMembers.map(
+                (member) => Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: Tooltip(
+                    message: member.displayLabel,
+                    child: ChoiceChip(
+                      avatar: CircleAvatar(
+                        radius: 9,
+                        backgroundImage: AvatarImageCache.provider(
+                          member.avatarUrl,
+                        ),
+                        child:
+                            member.avatarUrl == null ||
+                                    member.avatarUrl!.isEmpty
+                                ? Text(
+                                  _initial(member.displayLabel),
+                                  style: const TextStyle(fontSize: 10),
+                                )
+                                : null,
+                      ),
+                      label:
+                          compact
+                              ? const SizedBox.shrink()
+                              : Text(member.displayLabel),
+                      selected: selectedValue == member.userId,
+                      onSelected: (_) => onChanged(member.userId),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  String _initial(String label) {
+    final trimmed = label.trim();
+    return trimmed.isEmpty ? '?' : trimmed[0].toUpperCase();
   }
 }
 
@@ -377,17 +504,20 @@ class _BoardTaskColumn extends ConsumerWidget {
                             (context, index) => const SizedBox(height: 14),
                         itemBuilder: (context, index) {
                           final task = sortedTasks[index];
-                          return _TaskCard(
-                            task: task,
-                            canEdit: canEdit,
-                            draggable: false,
-                            onTap:
-                                () => _showTaskDetails(
-                                  context: context,
-                                  boardId: board.id,
-                                  task: task,
-                                  canEdit: canEdit,
-                                ),
+                          return RepaintBoundary(
+                            key: ValueKey('task-card-boundary-${task.id}'),
+                            child: _TaskCard(
+                              task: task,
+                              canEdit: canEdit,
+                              draggable: false,
+                              onTap:
+                                  () => _showTaskDetails(
+                                    context: context,
+                                    boardId: board.id,
+                                    task: task,
+                                    canEdit: canEdit,
+                                  ),
+                            ),
                           );
                         },
                       ),
@@ -494,146 +624,187 @@ class _KanbanColumn extends ConsumerWidget {
     required this.canEdit,
     required this.reorderIndex,
     required this.stage,
+    this.assigneeFilter,
   });
 
   final String boardId;
   final bool canEdit;
   final int reorderIndex;
   final KanbanStage stage;
+  final String? assigneeFilter;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    DebugRebuildCounter.mark('KanbanColumn:$boardId:${stage.name}');
+
     final tasksValue = ref.watch(
       tasksForStatusProvider(
         TasksForStatusRequest(boardId: boardId, status: stage.name),
       ),
     );
 
-    return DragTarget<KanbanTask>(
-      onWillAcceptWithDetails: (_) => canEdit,
-      onAcceptWithDetails: (details) async {
-        if (!canEdit) {
-          return;
-        }
-        await ref
-            .read(kanbanRepositoryProvider)
-            .moveTask(taskId: details.data.id, status: stage.name);
-        invalidateBoard(ref, boardId);
-      },
-      builder: (context, candidateData, rejectedData) {
-        final colorScheme = Theme.of(context).colorScheme;
-        final isHovering = candidateData.isNotEmpty;
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 160),
-          margin: const EdgeInsets.only(bottom: 12),
-          padding: const EdgeInsets.fromLTRB(14, 14, 14, 16),
-          decoration: BoxDecoration(
-            color:
-                isHovering
-                    ? colorScheme.primaryContainer.withValues(alpha: 0.38)
-                    : colorScheme.surface,
-            borderRadius: BorderRadius.circular(28),
-            border: Border.all(
+    return RepaintBoundary(
+      child: DragTarget<KanbanTask>(
+        onWillAcceptWithDetails: (_) => canEdit,
+        onAcceptWithDetails: (details) async {
+          if (!canEdit) {
+            return;
+          }
+          await ref
+              .read(kanbanRepositoryProvider)
+              .moveTask(taskId: details.data.id, status: stage.name);
+          invalidateBoardTaskSideEffects(ref, boardId);
+        },
+        builder: (context, candidateData, rejectedData) {
+          final colorScheme = Theme.of(context).colorScheme;
+          final isHovering = candidateData.isNotEmpty;
+          return AnimatedContainer(
+            duration: const Duration(milliseconds: 160),
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.fromLTRB(14, 14, 14, 16),
+            decoration: BoxDecoration(
               color:
-                  isHovering ? colorScheme.primary : colorScheme.outlineVariant,
-            ),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x0A000000),
-                blurRadius: 18,
-                offset: Offset(0, 8),
+                  isHovering
+                      ? colorScheme.primaryContainer.withValues(alpha: 0.38)
+                      : colorScheme.surface,
+              borderRadius: BorderRadius.circular(28),
+              border: Border.all(
+                color:
+                    isHovering
+                        ? colorScheme.primary
+                        : colorScheme.outlineVariant,
               ),
-            ],
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(4, 2, 0, 14),
-                child: Row(
-                  children: [
-                    _StatusDot(colorValue: stage.colorValue, label: stage.name),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        stage.name,
-                        style: Theme.of(context).textTheme.titleMedium
-                            ?.copyWith(fontWeight: FontWeight.w700),
+              boxShadow: const [
+                BoxShadow(
+                  color: Color(0x0A000000),
+                  blurRadius: 18,
+                  offset: Offset(0, 8),
+                ),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(4, 2, 0, 14),
+                  child: Row(
+                    children: [
+                      _StatusDot(
+                        colorValue: stage.colorValue,
+                        label: stage.name,
                       ),
-                    ),
-                    if (boardId != demoBoardId && canEdit)
-                      ReorderableDragStartListener(
-                        index: reorderIndex,
-                        child: Tooltip(
-                          message: 'Move stage',
-                          child: MouseRegion(
-                            cursor: SystemMouseCursors.grab,
-                            child: Padding(
-                              padding: const EdgeInsets.all(8),
-                              child: Icon(
-                                Icons.drag_indicator_rounded,
-                                color:
-                                    Theme.of(
-                                      context,
-                                    ).colorScheme.onSurfaceVariant,
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          stage.name,
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w700),
+                        ),
+                      ),
+                      if (boardId != demoBoardId && canEdit)
+                        ReorderableDragStartListener(
+                          index: reorderIndex,
+                          child: Tooltip(
+                            message: 'Move stage',
+                            child: MouseRegion(
+                              cursor: SystemMouseCursors.grab,
+                              child: Padding(
+                                padding: const EdgeInsets.all(8),
+                                child: Icon(
+                                  Icons.drag_indicator_rounded,
+                                  color:
+                                      Theme.of(
+                                        context,
+                                      ).colorScheme.onSurfaceVariant,
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                    if (boardId != demoBoardId && canEdit) ...[
-                      IconButton(
-                        // Add task button
-                        tooltip: 'Add task',
-                        visualDensity: VisualDensity.compact,
-                        icon: const Icon(Icons.add_rounded),
-                        onPressed:
-                            () => _showTaskEditor(
-                              context: context,
-                              boardId: boardId,
-                              initialStatus: stage.name,
-                            ),
-                      ),
-                      // Stage options menu
-                      PopupMenuButton<void>(
-                        icon: const Icon(Icons.more_vert_rounded, size: 20),
-                        itemBuilder:
-                            (context) => [
-                              PopupMenuItem(
-                                child: const Text('Rename Stage'),
-                                onTap:
-                                    () => _showRenameStageDialog(
-                                      context,
-                                      ref,
-                                      stage,
-                                    ),
+                      if (boardId != demoBoardId && canEdit) ...[
+                        IconButton(
+                          // Add task button
+                          tooltip: 'Add task',
+                          visualDensity: VisualDensity.compact,
+                          icon: const Icon(Icons.add_rounded),
+                          onPressed:
+                              () => _showTaskEditor(
+                                context: context,
+                                boardId: boardId,
+                                initialStatus: stage.name,
                               ),
-                              PopupMenuItem(
-                                // TODO: Add confirmation dialog for deleting stages with tasks
-                                child: const Text('Remove Stage'),
-                                onTap: () async {
-                                  await ref
-                                      .read(kanbanRepositoryProvider)
-                                      .deleteStage(stage.id);
-                                  invalidateBoard(ref, boardId);
-                                },
-                              ),
-                            ],
-                      ),
+                        ),
+                        // Stage options menu
+                        PopupMenuButton<void>(
+                          icon: const Icon(Icons.more_vert_rounded, size: 20),
+                          itemBuilder:
+                              (context) => [
+                                PopupMenuItem(
+                                  child: const Text('Rename Stage'),
+                                  onTap:
+                                      () => _showRenameStageDialog(
+                                        context,
+                                        ref,
+                                        stage,
+                                      ),
+                                ),
+                                PopupMenuItem(
+                                  // TODO: Add confirmation dialog for deleting stages with tasks
+                                  child: const Text('Remove Stage'),
+                                  onTap: () async {
+                                    await ref
+                                        .read(kanbanRepositoryProvider)
+                                        .deleteStage(stage.id);
+                                    invalidateBoard(ref, boardId);
+                                  },
+                                ),
+                              ],
+                        ),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
-              ),
-              Expanded(
-                child: tasksValue.when(
-                  data:
-                      (tasks) => ListView.separated(
+                Expanded(
+                  child: tasksValue.when(
+                    data: (tasks) {
+                      final filteredTasks =
+                          tasks
+                              .where(
+                                (task) => _matchesAssigneeFilter(
+                                  task,
+                                  assigneeFilter,
+                                ),
+                              )
+                              .toList();
+
+                      if (filteredTasks.isEmpty) {
+                        return Center(
+                          child: Text(
+                            assigneeFilter == null
+                                ? 'No tasks yet.'
+                                : 'No matching tasks.',
+                            textAlign: TextAlign.center,
+                            style: Theme.of(
+                              context,
+                            ).textTheme.bodyMedium?.copyWith(
+                              color:
+                                  Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        );
+                      }
+
+                      return ListView.separated(
                         padding: const EdgeInsets.only(top: 2, bottom: 2),
-                        itemCount: tasks.length,
+                        itemCount: filteredTasks.length,
                         separatorBuilder:
                             (context, index) => const SizedBox(height: 14),
                         itemBuilder: (context, index) {
-                          final task = tasks[index];
+                          final task = filteredTasks[index];
+                          final taskId = task.id;
+                          final taskBoardId = task.boardId;
                           final taskCanEdit =
                               boardId == demoBoardId
                                   ? ref
@@ -644,37 +815,53 @@ class _KanbanColumn extends ConsumerWidget {
                                       false
                                   : canEdit;
 
-                          return _TaskCard(
-                            task: task,
-                            onTap:
-                                () => _showTaskDetails(
-                                  context: context,
-                                  boardId: task.boardId,
-                                  task: task,
-                                  canEdit: taskCanEdit,
-                                ),
-                            canEdit: taskCanEdit,
+                          return RepaintBoundary(
+                            key: ValueKey('task-card-boundary-$taskId'),
+                            child: _TaskCardById(
+                              boardId: taskBoardId,
+                              taskId: taskId,
+                              onTap:
+                                  (latestTask) => _showTaskDetails(
+                                    context: context,
+                                    boardId: latestTask.boardId,
+                                    task: latestTask,
+                                    canEdit: taskCanEdit,
+                                  ),
+                              canEdit: taskCanEdit,
+                            ),
                           );
                         },
-                      ),
-                  loading:
-                      () => const Center(child: CircularProgressIndicator()),
-                  error:
-                      (error, stackTrace) => Center(
-                        child: Text(
-                          friendlyErrorMessage(
-                            error,
-                            fallback: 'Could not load tasks.',
+                      );
+                    },
+                    loading:
+                        () => const Center(child: CircularProgressIndicator()),
+                    error:
+                        (error, stackTrace) => Center(
+                          child: Text(
+                            friendlyErrorMessage(
+                              error,
+                              fallback: 'Could not load tasks.',
+                            ),
                           ),
                         ),
-                      ),
+                  ),
                 ),
-              ),
-            ],
-          ),
-        );
-      },
+              ],
+            ),
+          );
+        },
+      ),
     );
+  }
+
+  bool _matchesAssigneeFilter(KanbanTask task, String? filter) {
+    if (filter == null) {
+      return true;
+    }
+    if (filter == _unassignedAssigneeFilter) {
+      return task.assigneeId == null || task.assigneeId!.isEmpty;
+    }
+    return task.assigneeId == filter;
   }
 
   void _showTaskEditor({
@@ -1256,7 +1443,7 @@ class _TaskDetailsSheetState extends ConsumerState<_TaskDetailsSheet> {
 
     try {
       await ref.read(kanbanRepositoryProvider).deleteTask(task.id);
-      invalidateBoard(ref, task.boardId);
+      invalidateBoardTaskSideEffects(ref, task.boardId);
       if (context.mounted) {
         Navigator.of(context).pop();
       }
@@ -1550,6 +1737,49 @@ class _StatusDot extends StatelessWidget {
   }
 }
 
+class _TaskCardById extends ConsumerWidget {
+  const _TaskCardById({
+    required this.boardId,
+    required this.taskId,
+    required this.onTap,
+    required this.canEdit,
+  });
+
+  final String boardId;
+  final String taskId;
+  final ValueChanged<KanbanTask> onTap;
+  final bool canEdit;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final taskValue = ref.watch(
+      taskByIdProvider(TaskByIdRequest(boardId: boardId, taskId: taskId)),
+    );
+
+    return taskValue.when(
+      data: (task) {
+        if (task == null) {
+          return const SizedBox.shrink();
+        }
+        return _TaskCard(
+          task: task,
+          onTap: () => onTap(task),
+          canEdit: canEdit,
+        );
+      },
+      loading: () => const SizedBox.shrink(),
+      error:
+          (error, _) => Tooltip(
+            message: friendlyErrorMessage(
+              error,
+              fallback: 'Could not load this task.',
+            ),
+            child: const SizedBox.shrink(),
+          ),
+    );
+  }
+}
+
 class _TaskCard extends StatelessWidget {
   const _TaskCard({
     required this.task,
@@ -1565,20 +1795,6 @@ class _TaskCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final visibleDescription = GoogleDriveUrlParser.removeDriveUrls(
-      task.description ?? '',
-    );
-    final hasDescription = visibleDescription.isNotEmpty;
-    final dueAt = task.dueAt;
-    final isOverdue =
-        dueAt != null &&
-        DateTime(dueAt.year, dueAt.month, dueAt.day).isBefore(
-          DateTime(
-            DateTime.now().year,
-            DateTime.now().month,
-            DateTime.now().day,
-          ),
-        );
     final canDrag = draggable ?? canEdit;
     final colorScheme = Theme.of(context).colorScheme;
     final card = DecoratedBox(
@@ -1600,120 +1816,7 @@ class _TaskCard extends StatelessWidget {
         child: InkWell(
           borderRadius: BorderRadius.circular(18),
           onTap: onTap,
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Expanded(
-                      child: Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
-                        children: [
-                          _TaskBadge(
-                            label: task.status,
-                            color: _fallbackColor(task.status),
-                          ),
-                          _TaskBadge(
-                            label: TaskPriority.label(task.priority),
-                            color: _priorityColor(task.priority),
-                            icon: Icons.flag_rounded,
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (canDrag) ...[
-                      const SizedBox(width: 8),
-                      Tooltip(
-                        message: 'Long-press and drag to move',
-                        child: MouseRegion(
-                          cursor: SystemMouseCursors.grab,
-                          child: Padding(
-                            padding: const EdgeInsets.only(top: 1),
-                            child: Icon(
-                              Icons.drag_indicator_rounded,
-                              size: 18,
-                              color: Theme.of(context).colorScheme.outline,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  task.title,
-                  style: Theme.of(
-                    context,
-                  ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                if (hasDescription) ...[
-                  const SizedBox(height: 10),
-                  Text(
-                    visibleDescription,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      height: 1.35,
-                    ),
-                  ),
-                ],
-                if (dueAt != null || task.attachmentUrls.isNotEmpty) ...[
-                  const SizedBox(height: 10),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: [
-                      if (dueAt != null)
-                        _TaskMiniChip(
-                          icon: Icons.event_rounded,
-                          label: DateFormat('MMM d').format(dueAt),
-                          color:
-                              isOverdue
-                                  ? Theme.of(context).colorScheme.error
-                                  : Theme.of(context).colorScheme.primary,
-                        ),
-                      if (task.attachmentUrls.isNotEmpty)
-                        _TaskMiniChip(
-                          icon: Icons.image_outlined,
-                          label: '${task.attachmentUrls.length}',
-                          color: Theme.of(context).colorScheme.secondary,
-                        ),
-                    ],
-                  ),
-                ],
-                if (task.updatedAt != task.createdAt) ...[
-                  const SizedBox(height: 8),
-                  Row(
-                    children: [
-                      const Icon(
-                        Icons.access_time_rounded,
-                        size: 14,
-                        color: Color(0xFF9E9E9E),
-                      ),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          'Updated ${DateFormat('MMM d').format(task.updatedAt)}',
-                          style: Theme.of(context).textTheme.labelSmall
-                              ?.copyWith(color: const Color(0xFF9E9E9E)),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ],
-            ),
-          ),
+          child: _MemoizedTaskCardContent(task: task, canDrag: canDrag),
         ),
       ),
     );
@@ -1732,14 +1835,269 @@ class _TaskCard extends StatelessWidget {
       child: card,
     );
   }
+}
 
-  Color _fallbackColor(String label) {
-    return switch (label.toLowerCase()) {
-      'to do' => const Color(0xFF5E6AD2),
-      'in progress' => const Color(0xFFB26A00),
-      'done' => const Color(0xFF1B7F5A),
-      _ => Colors.blueGrey,
-    };
+class _MemoizedTaskCardContent extends StatefulWidget {
+  const _MemoizedTaskCardContent({required this.task, required this.canDrag});
+
+  final KanbanTask task;
+  final bool canDrag;
+
+  @override
+  State<_MemoizedTaskCardContent> createState() =>
+      _MemoizedTaskCardContentState();
+}
+
+class _MemoizedTaskCardContentState extends State<_MemoizedTaskCardContent> {
+  _TaskCardSignature? _signature;
+  Widget? _content;
+
+  @override
+  void didUpdateWidget(covariant _MemoizedTaskCardContent oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final nextSignature = _TaskCardSignature.from(
+      widget.task,
+      canDrag: widget.canDrag,
+    );
+    if (_signature != nextSignature) {
+      _signature = null;
+      _content = null;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final signature = _TaskCardSignature.from(
+      widget.task,
+      canDrag: widget.canDrag,
+    );
+    final cachedContent = _content;
+    if (_signature == signature && cachedContent != null) {
+      return cachedContent;
+    }
+
+    DebugRebuildCounter.mark('TaskCard:${widget.task.id}', logEvery: 25);
+
+    _signature = signature;
+    _content = _TaskCardContent(task: widget.task, canDrag: widget.canDrag);
+    return _content!;
+  }
+}
+
+class _TaskCardContent extends StatelessWidget {
+  const _TaskCardContent({required this.task, required this.canDrag});
+
+  final KanbanTask task;
+  final bool canDrag;
+
+  @override
+  Widget build(BuildContext context) {
+    final visibleDescription = GoogleDriveUrlParser.removeDriveUrls(
+      task.description ?? '',
+    );
+    final hasDescription = visibleDescription.isNotEmpty;
+    final dueAt = task.dueAt;
+    final isOverdue =
+        dueAt != null &&
+        DateTime(dueAt.year, dueAt.month, dueAt.day).isBefore(
+          DateTime(
+            DateTime.now().year,
+            DateTime.now().month,
+            DateTime.now().day,
+          ),
+        );
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: [
+                    _TaskBadge(
+                      label: task.status,
+                      color: _fallbackStatusColor(task.status),
+                    ),
+                    _TaskBadge(
+                      label: TaskPriority.label(task.priority),
+                      color: _priorityColor(task.priority),
+                      icon: Icons.flag_rounded,
+                    ),
+                  ],
+                ),
+              ),
+              if (canDrag) ...[
+                const SizedBox(width: 8),
+                Tooltip(
+                  message: 'Long-press and drag to move',
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.grab,
+                    child: Padding(
+                      padding: const EdgeInsets.only(top: 1),
+                      child: Icon(
+                        Icons.drag_indicator_rounded,
+                        size: 18,
+                        color: Theme.of(context).colorScheme.outline,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            task.title,
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          if (hasDescription) ...[
+            const SizedBox(height: 10),
+            Text(
+              visibleDescription,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+                height: 1.35,
+              ),
+            ),
+          ],
+          if (dueAt != null || task.attachmentUrls.isNotEmpty) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                if (dueAt != null)
+                  _TaskMiniChip(
+                    icon: Icons.event_rounded,
+                    label: DateFormat('MMM d').format(dueAt),
+                    color:
+                        isOverdue
+                            ? Theme.of(context).colorScheme.error
+                            : Theme.of(context).colorScheme.primary,
+                  ),
+                if (task.attachmentUrls.isNotEmpty)
+                  _TaskMiniChip(
+                    icon: Icons.image_outlined,
+                    label: '${task.attachmentUrls.length}',
+                    color: Theme.of(context).colorScheme.secondary,
+                  ),
+              ],
+            ),
+          ],
+          if (task.updatedAt != task.createdAt) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                const Icon(
+                  Icons.access_time_rounded,
+                  size: 14,
+                  color: Color(0xFF9E9E9E),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Updated ${DateFormat('MMM d').format(task.updatedAt)}',
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: const Color(0xFF9E9E9E),
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _TaskCardSignature {
+  const _TaskCardSignature({
+    required this.id,
+    required this.title,
+    required this.description,
+    required this.status,
+    required this.priority,
+    required this.updatedDay,
+    required this.assigneeId,
+    required this.dueAt,
+    required this.attachmentUrls,
+    required this.canDrag,
+  });
+
+  factory _TaskCardSignature.from(KanbanTask task, {required bool canDrag}) {
+    return _TaskCardSignature(
+      id: task.id,
+      title: task.title,
+      description: task.description,
+      status: task.status,
+      priority: task.priority,
+      updatedDay: DateTime(
+        task.updatedAt.year,
+        task.updatedAt.month,
+        task.updatedAt.day,
+      ),
+      assigneeId: task.assigneeId,
+      dueAt: task.dueAt,
+      attachmentUrls: Object.hashAll(task.attachmentUrls),
+      canDrag: canDrag,
+    );
+  }
+
+  final String id;
+  final String title;
+  final String? description;
+  final String status;
+  final String priority;
+  final DateTime updatedDay;
+  final String? assigneeId;
+  final DateTime? dueAt;
+  final int attachmentUrls;
+  final bool canDrag;
+
+  @override
+  bool operator ==(Object other) {
+    return other is _TaskCardSignature &&
+        other.id == id &&
+        other.title == title &&
+        other.description == description &&
+        other.status == status &&
+        other.priority == priority &&
+        other.updatedDay == updatedDay &&
+        other.assigneeId == assigneeId &&
+        other.dueAt == dueAt &&
+        other.attachmentUrls == attachmentUrls &&
+        other.canDrag == canDrag;
+  }
+
+  @override
+  int get hashCode {
+    return Object.hash(
+      id,
+      title,
+      description,
+      status,
+      priority,
+      updatedDay,
+      assigneeId,
+      dueAt,
+      attachmentUrls,
+      canDrag,
+    );
   }
 }
 

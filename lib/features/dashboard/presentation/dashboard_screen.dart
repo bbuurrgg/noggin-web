@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../../core/config/feature_flags.dart';
+import '../../../core/utils/avatar_image_cache.dart';
 import '../../../core/utils/friendly_error_message.dart';
 import '../../ai_control/presentation/ai_command_sheet.dart';
 import '../../auth/data/auth_providers.dart';
@@ -27,19 +29,75 @@ class DashboardScreen extends ConsumerStatefulWidget {
   ConsumerState<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends ConsumerState<DashboardScreen> {
+class _DashboardScreenState extends ConsumerState<DashboardScreen>
+    with WidgetsBindingObserver {
   bool _chatPanelOpen = false;
   bool _workspaceDrawerOpen = false;
   bool _workspaceDrawerExpandedContent = false;
+  bool _resumeRefreshInFlight = false;
+  DateTime? _lastResumeRefreshAt;
   _DashboardView _view = _DashboardView.home;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refreshWorkspaceAfterResume();
+    }
+  }
+
+  Future<void> _refreshWorkspaceAfterResume() async {
+    final now = DateTime.now();
+    final lastRefreshAt = _lastResumeRefreshAt;
+    if (_resumeRefreshInFlight ||
+        (lastRefreshAt != null &&
+            now.difference(lastRefreshAt) < const Duration(seconds: 12))) {
+      return;
+    }
+
+    _resumeRefreshInFlight = true;
+    _lastResumeRefreshAt = now;
+    try {
+      final client = ref.read(supabaseClientProvider);
+      final response = await client.auth.refreshSession();
+      final session = response.session ?? client.auth.currentSession;
+      await client.realtime.setAuth(session?.accessToken);
+
+      if (!mounted) {
+        return;
+      }
+
+      final selectedBoardId = ref.read(selectedBoardIdProvider);
+      invalidateKanban(ref, boardId: selectedBoardId);
+    } catch (_) {
+      // Provider invalidation below lets visible panels retry and surface errors.
+      if (!mounted) {
+        return;
+      }
+
+      final selectedBoardId = ref.read(selectedBoardIdProvider);
+      invalidateKanban(ref, boardId: selectedBoardId);
+    } finally {
+      _resumeRefreshInFlight = false;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final selectedBoardId = ref.watch(selectedBoardIdProvider);
     final boardsValue = ref.watch(allBoardsProvider);
     final pendingInvites = ref.watch(pendingBoardInvitesProvider).value ?? [];
-    final user = ref.watch(currentUserProvider);
-    final profile = ref.watch(currentUserProfileProvider).valueOrNull;
     final canEditSelectedBoard =
         ref.watch(canEditBoardProvider(selectedBoardId)).value ?? false;
     final isWideLayout = MediaQuery.sizeOf(context).width >= 900;
@@ -50,6 +108,8 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             ? 420.0
             : 360.0;
     final isDashboardBoard = selectedBoardId == demoBoardId;
+    final canAddTask = selectedBoardId != demoBoardId && canEditSelectedBoard;
+    const canUseAi = FeatureFlags.offlineAiEnabled;
 
     final currentBoard = boardsValue.maybeWhen(
       data: (boards) {
@@ -141,45 +201,54 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
           isWideLayout
               ? null
               : Drawer(
-                child: _WorkspaceDrawerContent(
-                  boardsValue: boardsValue,
-                  pendingInvites: pendingInvites,
-                  selectedBoardId: selectedBoardId,
-                  profile: profile,
-                  userEmail: user?.email,
-                  onSelectBoard: (boardId) {
-                    ref.read(selectedBoardIdProvider.notifier).state = boardId;
-                    Navigator.pop(context);
-                  },
-                  onRenameBoard:
-                      (board) => _showRenameBoard(context, ref, board),
-                  onCollaborators:
-                      (board) => _showCollaborators(context, board),
-                  onLeaveBoard: (board) => _showLeaveBoard(context, ref, board),
-                  onDeleteBoard:
-                      (board) => _showDeleteBoard(context, ref, board),
-                  onAddBoard: () => _showAddBoard(context, ref),
-                  onAddTask: () {
-                    Navigator.pop(context);
-                    _showAddTask(context, selectedBoardId);
-                  },
-                  onPendingInvites: () {
-                    Navigator.pop(context);
-                    _showPendingInvites(context);
-                  },
-                  onSettings: () {
-                    Navigator.pop(context);
-                    Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (_) => const SettingsScreen(),
-                      ),
+                child: Consumer(
+                  builder: (context, ref, _) {
+                    final user = ref.watch(currentUserProvider);
+                    final profile =
+                        ref.watch(currentUserProfileProvider).valueOrNull;
+                    return _WorkspaceDrawerContent(
+                      boardsValue: boardsValue,
+                      pendingInvites: pendingInvites,
+                      selectedBoardId: selectedBoardId,
+                      profile: profile,
+                      userEmail: user?.email,
+                      onSelectBoard: (boardId) {
+                        ref.read(selectedBoardIdProvider.notifier).state =
+                            boardId;
+                        Navigator.pop(context);
+                      },
+                      onRenameBoard:
+                          (board) => _showRenameBoard(context, ref, board),
+                      onCollaborators:
+                          (board) => _showCollaborators(context, board),
+                      onLeaveBoard:
+                          (board) => _showLeaveBoard(context, ref, board),
+                      onDeleteBoard:
+                          (board) => _showDeleteBoard(context, ref, board),
+                      onAddBoard: () => _showAddBoard(context, ref),
+                      onAddTask: () {
+                        Navigator.pop(context);
+                        _showAddTask(context, selectedBoardId);
+                      },
+                      onPendingInvites: () {
+                        Navigator.pop(context);
+                        _showPendingInvites(context);
+                      },
+                      onSettings: () {
+                        Navigator.pop(context);
+                        Navigator.of(context).push(
+                          MaterialPageRoute<void>(
+                            builder: (_) => const SettingsScreen(),
+                          ),
+                        );
+                      },
+                      onSignOut: () async {
+                        Navigator.pop(context);
+                        await ref.read(supabaseClientProvider).auth.signOut();
+                      },
+                      canEditSelectedBoard: canEditSelectedBoard,
                     );
                   },
-                  onSignOut: () async {
-                    Navigator.pop(context);
-                    await ref.read(supabaseClientProvider).auth.signOut();
-                  },
-                  canEditSelectedBoard: canEditSelectedBoard,
                 ),
               ),
       body: boardsValue.when(
@@ -198,7 +267,6 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
             );
           }
 
-          final tasksValue = ref.watch(boardTasksProvider(selectedBoardId));
           final board = CustomScrollView(
             slivers: [
               // Hiding the stats overview cards for now as requested
@@ -212,61 +280,67 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
               ),
             ],
           );
-          final home = tasksValue.when(
-            loading: () => const _DashboardLoading(),
-            error:
-                (error, _) => _DashboardError(
-                  message: friendlyErrorMessage(
-                    error,
-                    fallback: 'Could not load your dashboard.',
-                  ),
-                ),
-            data:
-                (tasks) => _FocusedDashboardHome(
-                  boards: boards,
-                  selectedBoard: currentBoard,
-                  selectedBoardId: selectedBoardId,
-                  tasks: tasks,
-                  currentUserId: user?.id,
-                  displayName:
-                      profile?.displayName.isNotEmpty == true
-                          ? profile!.displayName
-                          : user?.email?.split('@').first,
-                  canEditBoard: canEditSelectedBoard,
-                  view: _view,
-                  onViewChanged: (view) => setState(() => _view = view),
-                  onAddTask: () => _showAddTask(context, selectedBoardId),
-                  onOpenTask: (task) => _showTask(context, task.boardId, task),
-                  onOpenChat:
-                      selectedBoardId == demoBoardId
-                          ? null
-                          : () => _showChat(context, selectedBoardId),
-                  onOpenActivity:
-                      selectedBoardId == demoBoardId
-                          ? null
-                          : () => _showActivity(context, selectedBoardId),
-                ),
-          );
           final effectiveView = isDashboardBoard ? _view : _DashboardView.board;
-          final content =
-              effectiveView == _DashboardView.home
-                  ? home
-                  : Column(
-                    children: [
-                      if (isDashboardBoard)
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
-                          child: Align(
-                            alignment: Alignment.centerRight,
-                            child: _DashboardViewSwitcher(
-                              view: effectiveView,
-                              onChanged: (view) => setState(() => _view = view),
-                            ),
-                          ),
-                        ),
-                      Expanded(child: board),
-                    ],
-                  );
+          final Widget content;
+          if (effectiveView == _DashboardView.home) {
+            final tasksValue = ref.watch(boardTasksProvider(selectedBoardId));
+            final user = ref.watch(currentUserProvider);
+            final profile = ref.watch(currentUserProfileProvider).valueOrNull;
+            final home = tasksValue.when(
+              loading: () => const _DashboardLoading(),
+              error:
+                  (error, _) => _DashboardError(
+                    message: friendlyErrorMessage(
+                      error,
+                      fallback: 'Could not load your dashboard.',
+                    ),
+                  ),
+              data:
+                  (tasks) => _FocusedDashboardHome(
+                    boards: boards,
+                    selectedBoard: currentBoard,
+                    selectedBoardId: selectedBoardId,
+                    tasks: tasks,
+                    currentUserId: user?.id,
+                    displayName:
+                        profile?.displayName.isNotEmpty == true
+                            ? profile!.displayName
+                            : user?.email?.split('@').first,
+                    canEditBoard: canEditSelectedBoard,
+                    view: _view,
+                    onViewChanged: (view) => setState(() => _view = view),
+                    onAddTask: () => _showAddTask(context, selectedBoardId),
+                    onOpenTask:
+                        (task) => _showTask(context, task.boardId, task),
+                    onOpenChat:
+                        selectedBoardId == demoBoardId
+                            ? null
+                            : () => _showChat(context, selectedBoardId),
+                    onOpenActivity:
+                        selectedBoardId == demoBoardId
+                            ? null
+                            : () => _showActivity(context, selectedBoardId),
+                  ),
+            );
+            content = home;
+          } else {
+            content = Column(
+              children: [
+                if (isDashboardBoard)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
+                    child: Align(
+                      alignment: Alignment.centerRight,
+                      child: _DashboardViewSwitcher(
+                        view: effectiveView,
+                        onChanged: (view) => setState(() => _view = view),
+                      ),
+                    ),
+                  ),
+                Expanded(child: board),
+              ],
+            );
+          }
 
           final mainContent =
               showSideChat
@@ -335,38 +409,50 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                         ),
                       ),
                     ),
-                    child: _WorkspaceDrawerContent(
-                      boardsValue: boardsValue,
-                      pendingInvites: pendingInvites,
-                      selectedBoardId: selectedBoardId,
-                      profile: profile,
-                      userEmail: user?.email,
-                      onSelectBoard:
-                          (boardId) =>
-                              ref.read(selectedBoardIdProvider.notifier).state =
-                                  boardId,
-                      onRenameBoard:
-                          (board) => _showRenameBoard(context, ref, board),
-                      onCollaborators:
-                          (board) => _showCollaborators(context, board),
-                      onLeaveBoard:
-                          (board) => _showLeaveBoard(context, ref, board),
-                      onDeleteBoard:
-                          (board) => _showDeleteBoard(context, ref, board),
-                      onAddBoard: () => _showAddBoard(context, ref),
-                      onAddTask: () => _showAddTask(context, selectedBoardId),
-                      onPendingInvites: () => _showPendingInvites(context),
-                      onSettings:
-                          () => Navigator.of(context).push(
-                            MaterialPageRoute<void>(
-                              builder: (_) => const SettingsScreen(),
-                            ),
-                          ),
-                      onSignOut:
-                          () async =>
-                              ref.read(supabaseClientProvider).auth.signOut(),
-                      compact: !_workspaceDrawerExpandedContent,
-                      canEditSelectedBoard: canEditSelectedBoard,
+                    child: Consumer(
+                      builder: (context, ref, _) {
+                        final user = ref.watch(currentUserProvider);
+                        final profile =
+                            ref.watch(currentUserProfileProvider).valueOrNull;
+                        return _WorkspaceDrawerContent(
+                          boardsValue: boardsValue,
+                          pendingInvites: pendingInvites,
+                          selectedBoardId: selectedBoardId,
+                          profile: profile,
+                          userEmail: user?.email,
+                          onSelectBoard:
+                              (boardId) =>
+                                  ref
+                                      .read(selectedBoardIdProvider.notifier)
+                                      .state = boardId,
+                          onRenameBoard:
+                              (board) => _showRenameBoard(context, ref, board),
+                          onCollaborators:
+                              (board) => _showCollaborators(context, board),
+                          onLeaveBoard:
+                              (board) => _showLeaveBoard(context, ref, board),
+                          onDeleteBoard:
+                              (board) => _showDeleteBoard(context, ref, board),
+                          onAddBoard: () => _showAddBoard(context, ref),
+                          onAddTask:
+                              () => _showAddTask(context, selectedBoardId),
+                          onPendingInvites: () => _showPendingInvites(context),
+                          onSettings:
+                              () => Navigator.of(context).push(
+                                MaterialPageRoute<void>(
+                                  builder: (_) => const SettingsScreen(),
+                                ),
+                              ),
+                          onSignOut:
+                              () async =>
+                                  ref
+                                      .read(supabaseClientProvider)
+                                      .auth
+                                      .signOut(),
+                          compact: !_workspaceDrawerExpandedContent,
+                          canEditSelectedBoard: canEditSelectedBoard,
+                        );
+                      },
                     ),
                   ),
                 ),
@@ -387,53 +473,64 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
           );
         },
       ),
-      floatingActionButton: Padding(
-        padding: EdgeInsets.only(right: showSideChat ? sideChatWidth : 0),
-        child: PopupMenuButton<int>(
-          offset: const Offset(0, -128),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(24),
-          ),
-          onSelected: (value) {
-            if (value == 1) _showAddTask(context, selectedBoardId);
-            if (value == 2) _showGemini(context, selectedBoardId);
-          },
-          itemBuilder:
-              (context) => [
-                if (selectedBoardId != demoBoardId && canEditSelectedBoard)
-                  PopupMenuItem(
-                    value: 1,
-                    child: Row(
-                      children: [
-                        Icon(
-                          Icons.add_task_rounded,
-                          color: Theme.of(context).colorScheme.primary,
-                        ),
-                        const SizedBox(width: 12),
-                        const Text('Add Task'),
+      floatingActionButton:
+          canAddTask || canUseAi
+              ? Padding(
+                padding: EdgeInsets.only(
+                  right: showSideChat ? sideChatWidth : 0,
+                ),
+                child: PopupMenuButton<int>(
+                  offset: const Offset(0, -128),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                  onSelected: (value) {
+                    if (value == 1) _showAddTask(context, selectedBoardId);
+                    if (value == 2) _showGemini(context, selectedBoardId);
+                  },
+                  itemBuilder:
+                      (context) => [
+                        if (canAddTask)
+                          PopupMenuItem(
+                            value: 1,
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.add_task_rounded,
+                                  color: Theme.of(context).colorScheme.primary,
+                                ),
+                                const SizedBox(width: 12),
+                                const Text('Add Task'),
+                              ],
+                            ),
+                          ),
+                        if (canUseAi)
+                          PopupMenuItem(
+                            value: 2,
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.auto_awesome_rounded,
+                                  color:
+                                      Theme.of(context).colorScheme.secondary,
+                                ),
+                                const SizedBox(width: 12),
+                                const Text('AI Assistant'),
+                              ],
+                            ),
+                          ),
                       ],
+                  child: FloatingActionButton(
+                    onPressed: null,
+                    child: Icon(
+                      canUseAi
+                          ? Icons.auto_awesome_rounded
+                          : Icons.add_task_rounded,
                     ),
                   ),
-                PopupMenuItem(
-                  value: 2,
-                  child: Row(
-                    children: [
-                      Icon(
-                        Icons.auto_awesome_rounded,
-                        color: Theme.of(context).colorScheme.secondary,
-                      ),
-                      const SizedBox(width: 12),
-                      const Text('AI Assistant'),
-                    ],
-                  ),
                 ),
-              ],
-          child: const FloatingActionButton(
-            onPressed: null,
-            child: Icon(Icons.auto_awesome_rounded),
-          ),
-        ),
-      ),
+              )
+              : null,
     );
   }
 
@@ -715,6 +812,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
                         .read(kanbanRepositoryProvider)
                         .leaveBoard(board.id);
                     invalidateKanban(ref, boardId: board.id);
+                    invalidateBoardCollaboration(ref, board.id);
 
                     if (selectedId == board.id) {
                       ref.read(selectedBoardIdProvider.notifier).state =
@@ -1286,10 +1384,7 @@ class _WorkspaceRailContent extends StatelessWidget {
                   radius: 16,
                   backgroundColor:
                       Theme.of(context).colorScheme.surfaceContainerHighest,
-                  backgroundImage:
-                      avatarUrl == null || avatarUrl!.isEmpty
-                          ? null
-                          : NetworkImage(avatarUrl!),
+                  backgroundImage: AvatarImageCache.provider(avatarUrl),
                   child:
                       avatarUrl == null || avatarUrl!.isEmpty
                           ? const Icon(Icons.person_outline_rounded, size: 18)
@@ -1613,10 +1708,7 @@ class _DrawerAccountFooter extends StatelessWidget {
               radius: 17,
               backgroundColor:
                   Theme.of(context).colorScheme.surfaceContainerHighest,
-              backgroundImage:
-                  avatarUrl == null || avatarUrl!.isEmpty
-                      ? null
-                      : NetworkImage(avatarUrl!),
+              backgroundImage: AvatarImageCache.provider(avatarUrl),
               child:
                   avatarUrl == null || avatarUrl!.isEmpty
                       ? const Icon(Icons.person_outline_rounded, size: 19)
@@ -3781,6 +3873,7 @@ class _NotificationsSheetState extends ConsumerState<_NotificationsSheet> {
           .markNotificationsRead(notificationType: 'invite');
       ref.read(selectedBoardIdProvider.notifier).state = boardId;
       invalidateKanban(ref, boardId: boardId);
+      invalidateBoardCollaboration(ref, boardId);
       ref.invalidate(pendingBoardInvitesProvider);
       ref.invalidate(notificationsProvider);
 
@@ -4309,6 +4402,7 @@ class _PendingInvitesDialogState extends ConsumerState<_PendingInvitesDialog> {
           .acceptBoardInvite(invite.id);
       ref.read(selectedBoardIdProvider.notifier).state = boardId;
       invalidateKanban(ref, boardId: boardId);
+      invalidateBoardCollaboration(ref, boardId);
       ref.invalidate(pendingBoardInvitesProvider);
       ref.invalidate(notificationsProvider);
 
@@ -5530,7 +5624,7 @@ class _ChatAvatar extends StatelessWidget {
     return CircleAvatar(
       radius: 16,
       backgroundColor: Theme.of(context).colorScheme.primaryContainer,
-      backgroundImage: url == null || url.isEmpty ? null : NetworkImage(url),
+      backgroundImage: AvatarImageCache.provider(url),
       child:
           url == null || url.isEmpty
               ? Text(
@@ -5736,6 +5830,7 @@ class _CollaboratorsDialogState extends ConsumerState<_CollaboratorsDialog> {
     final selectedId = ref.read(selectedBoardIdProvider);
     await ref.read(kanbanRepositoryProvider).leaveBoard(widget.board.id);
     invalidateKanban(ref, boardId: widget.board.id);
+    invalidateBoardCollaboration(ref, widget.board.id);
 
     if (selectedId == widget.board.id) {
       ref.read(selectedBoardIdProvider.notifier).state = demoBoardId;
@@ -5804,10 +5899,7 @@ class _CollaboratorsDialogState extends ConsumerState<_CollaboratorsDialog> {
   }
 
   void _invalidateCollaboration() {
-    ref.invalidate(boardMembersProvider(widget.board.id));
-    ref.invalidate(boardInvitesProvider(widget.board.id));
-    ref.invalidate(boardAccessProvider(widget.board.id));
-    ref.invalidate(canEditBoardProvider(widget.board.id));
+    invalidateBoardCollaboration(ref, widget.board.id);
   }
 
   @override

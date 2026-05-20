@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import '../../../core/config/feature_flags.dart';
 import '../../kanban/domain/kanban_task.dart';
 import '../domain/ai_task_command.dart';
 import '../domain/offline_model_type.dart';
@@ -12,7 +13,8 @@ class OnDeviceLlmTaskCommandService {
 
   final bool sentenceCaseFormattingEnabled;
 
-  bool get hasActiveModel => GemmaRuntime.hasActiveModel();
+  bool get hasActiveModel =>
+      FeatureFlags.offlineAiEnabled && GemmaRuntime.hasActiveModel();
 
   Future<List<String>> listInstalledModels() {
     return GemmaRuntime.listInstalledModels();
@@ -22,6 +24,9 @@ class OnDeviceLlmTaskCommandService {
     required String path,
     required OfflineModelType modelType,
   }) async {
+    if (!FeatureFlags.offlineAiEnabled) {
+      throw const AiNotConfiguredException();
+    }
     await GemmaRuntime.installModelFromFile(path: path, modelType: modelType);
   }
 
@@ -146,7 +151,7 @@ class OnDeviceLlmTaskCommandService {
     required String prompt,
     required int maxTokens,
   }) async {
-    if (!GemmaRuntime.hasActiveModel()) {
+    if (!FeatureFlags.offlineAiEnabled || !GemmaRuntime.hasActiveModel()) {
       throw const AiNotConfiguredException();
     }
 

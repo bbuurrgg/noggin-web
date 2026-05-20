@@ -1,0 +1,7 @@
+name: local_hnsw
+description: Pure Dart compatibility shim for flutter_gemma web builds.
+version: 1.0.0
+publish_to: none
+
+environment:
+  sdk: ^3.7.0

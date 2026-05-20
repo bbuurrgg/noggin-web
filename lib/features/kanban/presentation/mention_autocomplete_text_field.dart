@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/utils/avatar_image_cache.dart';
 import '../domain/kanban_task.dart';
 
 class MentionAutocompleteTextField extends StatefulWidget {
@@ -81,10 +82,9 @@ class _MentionAutocompleteTextFieldState
                     dense: true,
                     leading: CircleAvatar(
                       radius: 14,
-                      backgroundImage:
-                          member.avatarUrl == null || member.avatarUrl!.isEmpty
-                              ? null
-                              : NetworkImage(member.avatarUrl!),
+                      backgroundImage: AvatarImageCache.provider(
+                        member.avatarUrl,
+                      ),
                       child:
                           member.avatarUrl == null || member.avatarUrl!.isEmpty
                               ? Text(_initial(member.displayLabel))

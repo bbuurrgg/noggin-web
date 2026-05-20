@@ -1,10 +1,10 @@
 import 'package:file_picker/file_picker.dart';
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:speech_to_text/speech_to_text.dart';
 import 'package:uuid/uuid.dart';
 
+import '../../../core/config/feature_flags.dart';
 import '../../../core/utils/friendly_error_message.dart';
 import '../../kanban/data/kanban_providers.dart';
 import '../../kanban/domain/kanban_task.dart';
@@ -258,12 +258,7 @@ class _AiCommandSheetState extends ConsumerState<AiCommandSheet> {
     }
     if (!_hasModel &&
         !(_mode == AiMode.command && _isSlashCommand(instruction))) {
-      _showMessage(
-        kIsWeb
-            ? 'Web preview supports slash commands only for now.'
-            : 'Install an offline AI model first.',
-        isError: true,
-      );
+      _showMessage('Install an offline AI model first.', isError: true);
       return;
     }
 
@@ -612,9 +607,9 @@ class _AiCommandSheetState extends ConsumerState<AiCommandSheet> {
     if (_installingModel || _running) {
       return;
     }
-    if (kIsWeb) {
+    if (!FeatureFlags.offlineAiEnabled) {
       _showMessage(
-        'Local model file install is not available on the web version yet.',
+        'Offline AI is available only in the mobile and desktop apps.',
         isError: true,
       );
       return;
@@ -659,6 +654,41 @@ class _AiCommandSheetState extends ConsumerState<AiCommandSheet> {
 
   @override
   Widget build(BuildContext context) {
+    if (!FeatureFlags.offlineAiEnabled) {
+      return SafeArea(
+        child: Padding(
+          padding: EdgeInsets.fromLTRB(
+            20,
+            12,
+            20,
+            MediaQuery.viewInsetsOf(context).bottom + 20,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.auto_awesome_rounded),
+                  const SizedBox(width: 10),
+                  Text(
+                    'AI Assistant',
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Offline AI is available only in the mobile and desktop apps.',
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return SafeArea(
       child: Padding(
         padding: EdgeInsets.fromLTRB(
@@ -683,21 +713,7 @@ class _AiCommandSheetState extends ConsumerState<AiCommandSheet> {
                 ),
               ],
             ),
-            if (kIsWeb) ...[
-              const SizedBox(height: 12),
-              DecoratedBox(
-                decoration: BoxDecoration(
-                  color: const Color(0xFFFFF4D8),
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                child: const Padding(
-                  padding: EdgeInsets.all(12),
-                  child: Text(
-                    'Web preview: local model selection is not available here yet. Slash commands still work in Command mode.',
-                  ),
-                ),
-              ),
-            ] else if (!_hasModel) ...[
+            if (!_hasModel) ...[
               const SizedBox(height: 12),
               DecoratedBox(
                 decoration: BoxDecoration(
@@ -785,13 +801,11 @@ class _AiCommandSheetState extends ConsumerState<AiCommandSheet> {
                   value: AiMode.analysis,
                   icon: Icon(Icons.query_stats_rounded),
                   tooltip: 'Analyze',
-                  enabled: !kIsWeb,
                 ),
                 ButtonSegment<AiMode>(
                   value: AiMode.chat,
                   icon: Icon(Icons.chat_bubble_outline_rounded),
                   tooltip: 'Chat',
-                  enabled: !kIsWeb,
                 ),
               ],
               selected: {_mode},
@@ -829,10 +843,7 @@ class _AiCommandSheetState extends ConsumerState<AiCommandSheet> {
                   icon: Icon(
                     _listening ? Icons.stop_rounded : Icons.mic_rounded,
                   ),
-                  onPressed:
-                      _running || (kIsWeb && !_hasModel)
-                          ? null
-                          : _toggleListening,
+                  onPressed: _running ? null : _toggleListening,
                 ),
                 border: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(24),
