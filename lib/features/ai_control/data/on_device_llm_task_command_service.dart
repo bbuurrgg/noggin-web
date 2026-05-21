@@ -4,6 +4,7 @@ import '../../../core/config/feature_flags.dart';
 import '../../kanban/domain/kanban_task.dart';
 import '../domain/ai_task_command.dart';
 import '../domain/offline_model_type.dart';
+import 'ai_command_json_parser.dart';
 import 'gemma_runtime.dart';
 
 class OnDeviceLlmTaskCommandService {
@@ -287,92 +288,13 @@ class OnDeviceLlmTaskCommandService {
   }
 
   Map<String, Object?> _decodeCommandJson(String text) {
-    final cleaned = _extractJsonObject(
-      text
-          .replaceAll(RegExp(r'^```json\s*', multiLine: true), '')
-          .replaceAll(RegExp(r'^```\s*', multiLine: true), '')
-          .replaceAll(RegExp(r'\s*```$', multiLine: true), '')
-          .trim(),
-    );
-
     try {
-      final decoded = jsonDecode(cleaned) as Map<String, Object?>;
-      return _normalizeCommandJson(decoded);
+      return AiCommandJsonParser.decodeCommandJson(text);
     } on FormatException {
       throw AiCommandException(
         'On-device AI returned invalid JSON. Try a simpler command like: move "Task name" to Done. Raw response: $text',
       );
     }
-  }
-
-  String _extractJsonObject(String text) {
-    final start = text.indexOf('{');
-    if (start == -1) {
-      return text;
-    }
-
-    var depth = 0;
-    var inString = false;
-    var isEscaped = false;
-
-    for (var i = start; i < text.length; i++) {
-      final char = text[i];
-      if (inString) {
-        if (isEscaped) {
-          isEscaped = false;
-        } else if (char == '\\') {
-          isEscaped = true;
-        } else if (char == '"') {
-          inString = false;
-        }
-        continue;
-      }
-
-      if (char == '"') {
-        inString = true;
-      } else if (char == '{') {
-        depth++;
-      } else if (char == '}') {
-        depth--;
-        if (depth == 0) {
-          return text.substring(start, i + 1);
-        }
-      }
-    }
-
-    return text.substring(start);
-  }
-
-  Map<String, Object?> _normalizeCommandJson(Map<String, Object?> json) {
-    final normalized = Map<String, Object?>.from(json);
-
-    normalized['action'] = _normalizeAction(normalized['action'] as String?);
-    normalized['board_id'] ??= normalized['boardId'];
-    normalized['task_id'] ??= normalized['taskId'];
-    normalized['stage_name'] ??= normalized['stageName'];
-
-    if (normalized['title'] == null) {
-      normalized['title'] = normalized['name'];
-    }
-    if (normalized['titles'] == null) {
-      normalized['titles'] = normalized['tasks'];
-    }
-    if (normalized['status'] == null) {
-      normalized['status'] = normalized['stage'];
-    }
-    if (normalized['message'] == null) {
-      normalized['message'] = 'Done.';
-    }
-    final commands = normalized['commands'];
-    if (commands is List<Object?>) {
-      normalized['commands'] =
-          commands
-              .whereType<Map<String, Object?>>()
-              .map(_normalizeCommandJson)
-              .toList();
-    }
-
-    return normalized;
   }
 
   AiTaskCommand normalizeCommandStages(
@@ -400,24 +322,6 @@ class OnDeviceLlmTaskCommandService {
     );
   }
 
-  String? _normalizeAction(String? action) {
-    final normalized = _normalize(action ?? '').replaceAll(' ', '_');
-    return switch (normalized) {
-      'create_board' || 'new_board' || 'add_board' => 'create_board',
-      'rename_board' || 'edit_board' || 'update_board' => 'rename_board',
-      'create' || 'create_task' || 'new_task' || 'add_task' => 'create',
-      'create_many' || 'create_tasks' || 'add_tasks' => 'create_many',
-      'move' || 'move_task' || 'put' || 'put_task' => 'move',
-      'edit' || 'update' || 'update_task' || 'rename_task' => 'edit',
-      'clear_description' || 'remove_description' => 'clear_description',
-      'delete' || 'delete_task' || 'remove_task' => 'delete',
-      'add_stage' || 'create_stage' || 'new_stage' => 'add_stage',
-      'open' || 'open_task' || 'show_task' => 'open_task',
-      'open_board' || 'show_board' || 'switch_board' => 'open_board',
-      _ => action,
-    };
-  }
-
   AiTaskCommand? _planCommandLocally({
     required String boardId,
     required String instruction,
@@ -438,239 +342,348 @@ class OnDeviceLlmTaskCommandService {
       }
     }
 
-    if (normalized.startsWith('create board ') ||
-        normalized.startsWith('new board ') ||
-        normalized.startsWith('add board ')) {
+    return _firstPlannedCommand([
+      _planBoardCommand(boardId, instruction, normalized),
+      _planStageCommand(boardId, instruction, normalized),
+      _planOpenCommand(boardId, instruction, normalized, tasks),
+      _planCreateTaskCommand(boardId, instruction, normalized, stages),
+      _planMoveTaskCommand(instruction, normalized, tasks, stages),
+      _planDescriptionEditCommand(instruction, normalized, tasks),
+      _planRenameTaskCommand(instruction, normalized, tasks),
+      _planDeleteTaskCommand(instruction, normalized, tasks),
+    ]);
+  }
+
+  AiTaskCommand? _firstPlannedCommand(List<AiTaskCommand?> commands) {
+    for (final command in commands) {
+      if (command != null) {
+        return command;
+      }
+    }
+    return null;
+  }
+
+  AiTaskCommand? _planBoardCommand(
+    String boardId,
+    String instruction,
+    String normalized,
+  ) {
+    if (_startsWithAny(normalized, [
+      'create board',
+      'new board',
+      'add board',
+    ])) {
       final title = _afterAny(instruction, [
         'create board',
         'new board',
         'add board',
       ]);
-      if (title.isNotEmpty) {
-        return AiTaskCommand(
-          type: AiTaskCommandType.createBoard,
-          boardId: '',
-          taskId: '',
-          title: _cleanQuoted(title),
-          message: 'Created board "${_cleanQuoted(title)}".',
-        );
+      if (title.isEmpty) {
+        return null;
       }
+      final boardName = _cleanQuoted(title);
+      return AiTaskCommand(
+        type: AiTaskCommandType.createBoard,
+        boardId: '',
+        taskId: '',
+        title: boardName,
+        message: 'Created board "$boardName".',
+      );
     }
 
-    if (normalized.startsWith('rename board ') ||
-        normalized.startsWith('rename board to ') ||
-        normalized.startsWith('rename this board ') ||
-        normalized.startsWith('rename this board to ') ||
-        normalized.startsWith('call this board ')) {
+    if (_startsWithAny(normalized, [
+      'rename board',
+      'rename board to',
+      'rename this board',
+      'rename this board to',
+      'call this board',
+    ])) {
       final title = _afterAny(instruction, [
         'rename this board to',
         'rename board to',
         'rename board',
         'call this board',
       ]);
-      if (title.isNotEmpty) {
-        return AiTaskCommand(
-          type: AiTaskCommandType.renameBoard,
-          boardId: boardId,
-          taskId: '',
-          title: _cleanQuoted(title),
-          message: 'Renamed board to "${_cleanQuoted(title)}".',
-        );
+      if (title.isEmpty) {
+        return null;
       }
+      final boardName = _cleanQuoted(title);
+      return AiTaskCommand(
+        type: AiTaskCommandType.renameBoard,
+        boardId: boardId,
+        taskId: '',
+        title: boardName,
+        message: 'Renamed board to "$boardName".',
+      );
     }
 
-    if (normalized.startsWith('add stage ') ||
-        normalized.startsWith('create stage ') ||
-        normalized.startsWith('new stage ')) {
-      final stage = _afterAny(instruction, [
-        'add stage',
-        'create stage',
-        'new stage',
-      ]);
-      if (stage.isNotEmpty) {
-        final name = _formatNewStageName(_cleanQuoted(stage));
-        return AiTaskCommand(
-          type: AiTaskCommandType.addStage,
-          boardId: boardId,
-          taskId: '',
-          stageName: name,
-          message: 'Added stage "$name".',
-        );
-      }
-    }
+    return null;
+  }
 
-    if (normalized.startsWith('open board ') ||
-        normalized.startsWith('show board ') ||
-        normalized.startsWith('switch to board ')) {
+  AiTaskCommand? _planStageCommand(
+    String boardId,
+    String instruction,
+    String normalized,
+  ) {
+    if (!_startsWithAny(normalized, [
+      'add stage',
+      'create stage',
+      'new stage',
+    ])) {
+      return null;
+    }
+    final stage = _afterAny(instruction, [
+      'add stage',
+      'create stage',
+      'new stage',
+    ]);
+    if (stage.isEmpty) {
+      return null;
+    }
+    final name = _formatNewStageName(_cleanQuoted(stage));
+    return AiTaskCommand(
+      type: AiTaskCommandType.addStage,
+      boardId: boardId,
+      taskId: '',
+      stageName: name,
+      message: 'Added stage "$name".',
+    );
+  }
+
+  AiTaskCommand? _planOpenCommand(
+    String boardId,
+    String instruction,
+    String normalized,
+    List<KanbanTask> tasks,
+  ) {
+    if (_startsWithAny(normalized, [
+      'open board',
+      'show board',
+      'switch to board',
+    ])) {
       final title = _afterAny(instruction, [
         'switch to board',
         'open board',
         'show board',
       ]);
-      if (title.isNotEmpty) {
-        final boardName = _cleanQuoted(title);
-        return AiTaskCommand(
-          type: AiTaskCommandType.openBoard,
-          boardId: '',
-          taskId: '',
-          title: boardName,
-          message: 'Opened board "$boardName".',
-        );
+      if (title.isEmpty) {
+        return null;
       }
+      final boardName = _cleanQuoted(title);
+      return AiTaskCommand(
+        type: AiTaskCommandType.openBoard,
+        boardId: '',
+        taskId: '',
+        title: boardName,
+        message: 'Opened board "$boardName".',
+      );
     }
 
-    if (normalized.startsWith('open task ') ||
-        normalized.startsWith('show task ')) {
-      final task = _findTask(instruction, tasks);
-      if (task != null) {
-        return AiTaskCommand(
-          type: AiTaskCommandType.openTask,
-          boardId: task.boardId,
-          taskId: task.id,
-          title: task.title,
-          message: 'Opened "${task.title}".',
-        );
-      }
-
-      final title = _afterAny(instruction, ['open task', 'show task']);
-      if (title.isNotEmpty) {
-        final taskTitle = _cleanQuoted(title);
-        return AiTaskCommand(
-          type: AiTaskCommandType.openTask,
-          boardId: boardId,
-          taskId: '',
-          title: taskTitle,
-          message: 'I could not find "$taskTitle".',
-        );
-      }
+    if (!_startsWithAny(normalized, ['open task', 'show task'])) {
+      return null;
+    }
+    final task = _findTask(instruction, tasks);
+    if (task != null) {
+      return AiTaskCommand(
+        type: AiTaskCommandType.openTask,
+        boardId: task.boardId,
+        taskId: task.id,
+        title: task.title,
+        message: 'Opened "${task.title}".',
+      );
     }
 
-    if (normalized.startsWith('create tasks ') ||
-        normalized.startsWith('add tasks ') ||
-        normalized.startsWith('new tasks ')) {
+    final title = _afterAny(instruction, ['open task', 'show task']);
+    if (title.isEmpty) {
+      return null;
+    }
+    final taskTitle = _cleanQuoted(title);
+    return AiTaskCommand(
+      type: AiTaskCommandType.openTask,
+      boardId: boardId,
+      taskId: '',
+      title: taskTitle,
+      message: 'I could not find "$taskTitle".',
+    );
+  }
+
+  AiTaskCommand? _planCreateTaskCommand(
+    String boardId,
+    String instruction,
+    String normalized,
+    List<String> stages,
+  ) {
+    final defaultStatus = stages.isEmpty ? 'To Do' : stages.first;
+
+    if (_startsWithAny(normalized, [
+      'create tasks',
+      'add tasks',
+      'new tasks',
+    ])) {
       final rawTitles = _afterAny(instruction, [
         'create tasks',
         'add tasks',
         'new tasks',
       ]);
       final titles = _splitTaskTitles(rawTitles);
-      if (titles.isNotEmpty) {
-        return AiTaskCommand(
-          type: AiTaskCommandType.createMany,
-          boardId: boardId,
-          taskId: '',
-          titles: titles,
-          status: stages.isEmpty ? 'To Do' : stages.first,
-          message: 'Created ${titles.length} tasks.',
-        );
+      if (titles.isEmpty) {
+        return null;
       }
-    }
-
-    if (normalized.startsWith('create task ') ||
-        normalized.startsWith('add task ') ||
-        normalized.startsWith('new task ')) {
-      final title = _afterAny(instruction, [
-        'create task',
-        'add task',
-        'new task',
-      ]);
-      if (title.isNotEmpty) {
-        final titles = _splitRepeatedCreateTaskTitles(instruction);
-        if (titles.length > 1) {
-          return AiTaskCommand(
-            type: AiTaskCommandType.createMany,
-            boardId: boardId,
-            taskId: '',
-            titles: titles,
-            status: stages.isEmpty ? 'To Do' : stages.first,
-            message: 'Created ${titles.length} tasks.',
-          );
-        }
-
-        return AiTaskCommand(
-          type: AiTaskCommandType.create,
-          boardId: boardId,
-          taskId: '',
-          title: _cleanQuoted(title),
-          status: stages.isEmpty ? 'To Do' : stages.first,
-          message: 'Created "${_cleanQuoted(title)}".',
-        );
-      }
-    }
-
-    final destination = _findStage(instruction, stages);
-    if (_hasMoveIntent(normalized) && !_hasDescriptionIntent(normalized)) {
-      final task = _findTask(instruction, tasks);
-      if (task != null && destination != null) {
-        return AiTaskCommand(
-          type: AiTaskCommandType.move,
-          boardId: '',
-          taskId: task.id,
-          status: destination,
-          message: 'Moved "${task.title}" to $destination.',
-        );
-      }
-      if (task != null) {
-        final requestedStage = _requestedDestination(instruction);
-        return AiTaskCommand(
-          type: AiTaskCommandType.move,
-          boardId: '',
-          taskId: task.id,
-          message:
-              requestedStage.isEmpty
-                  ? 'I could not find that destination stage.'
-                  : 'I could not find a "$requestedStage" stage.',
-        );
-      }
-    }
-
-    final describedTask = _findTask(instruction, tasks);
-    if (describedTask != null &&
-        (normalized.contains('add description') ||
-            normalized.contains('set description') ||
-            normalized.contains('update description'))) {
-      final description = _descriptionFromInstruction(
-        instruction,
-        taskTitle: describedTask.title,
-      );
-      if (description.isNotEmpty) {
-        return AiTaskCommand(
-          type: AiTaskCommandType.edit,
-          boardId: '',
-          taskId: describedTask.id,
-          description: description,
-          message: 'Updated "${describedTask.title}".',
-        );
-      }
-    }
-
-    final renamedTask = _findTask(instruction, tasks);
-    if (renamedTask != null &&
-        (normalized.contains('rename ') || normalized.contains('call '))) {
-      final title = _titleAfterRenameInstruction(instruction);
-      if (title.isNotEmpty) {
-        return AiTaskCommand(
-          type: AiTaskCommandType.edit,
-          boardId: '',
-          taskId: renamedTask.id,
-          title: title,
-          message: 'Renamed task to "$title".',
-        );
-      }
-    }
-
-    final deleteTask = _findTask(instruction, tasks);
-    if (deleteTask != null &&
-        (normalized.contains('delete ') || normalized.contains('remove '))) {
       return AiTaskCommand(
-        type: AiTaskCommandType.delete,
-        boardId: '',
-        taskId: deleteTask.id,
-        message: 'Deleted "${deleteTask.title}".',
+        type: AiTaskCommandType.createMany,
+        boardId: boardId,
+        taskId: '',
+        titles: titles,
+        status: defaultStatus,
+        message: 'Created ${titles.length} tasks.',
       );
     }
 
-    return null;
+    if (!_startsWithAny(normalized, ['create task', 'add task', 'new task'])) {
+      return null;
+    }
+    final title = _afterAny(instruction, [
+      'create task',
+      'add task',
+      'new task',
+    ]);
+    if (title.isEmpty) {
+      return null;
+    }
+
+    final repeatedTitles = _splitRepeatedCreateTaskTitles(instruction);
+    if (repeatedTitles.length > 1) {
+      return AiTaskCommand(
+        type: AiTaskCommandType.createMany,
+        boardId: boardId,
+        taskId: '',
+        titles: repeatedTitles,
+        status: defaultStatus,
+        message: 'Created ${repeatedTitles.length} tasks.',
+      );
+    }
+
+    final taskTitle = _cleanQuoted(title);
+    return AiTaskCommand(
+      type: AiTaskCommandType.create,
+      boardId: boardId,
+      taskId: '',
+      title: taskTitle,
+      status: defaultStatus,
+      message: 'Created "$taskTitle".',
+    );
+  }
+
+  AiTaskCommand? _planMoveTaskCommand(
+    String instruction,
+    String normalized,
+    List<KanbanTask> tasks,
+    List<String> stages,
+  ) {
+    if (!_hasMoveIntent(normalized) || _hasDescriptionIntent(normalized)) {
+      return null;
+    }
+
+    final task = _findTask(instruction, tasks);
+    if (task == null) {
+      return null;
+    }
+    final destination = _findStage(instruction, stages);
+    if (destination != null) {
+      return AiTaskCommand(
+        type: AiTaskCommandType.move,
+        boardId: '',
+        taskId: task.id,
+        status: destination,
+        message: 'Moved "${task.title}" to $destination.',
+      );
+    }
+
+    final requestedStage = _requestedDestination(instruction);
+    return AiTaskCommand(
+      type: AiTaskCommandType.move,
+      boardId: '',
+      taskId: task.id,
+      message:
+          requestedStage.isEmpty
+              ? 'I could not find that destination stage.'
+              : 'I could not find a "$requestedStage" stage.',
+    );
+  }
+
+  AiTaskCommand? _planDescriptionEditCommand(
+    String instruction,
+    String normalized,
+    List<KanbanTask> tasks,
+  ) {
+    if (!normalized.contains('add description') &&
+        !normalized.contains('set description') &&
+        !normalized.contains('update description')) {
+      return null;
+    }
+    final task = _findTask(instruction, tasks);
+    if (task == null) {
+      return null;
+    }
+    final description = _descriptionFromInstruction(
+      instruction,
+      taskTitle: task.title,
+    );
+    if (description.isEmpty) {
+      return null;
+    }
+    return AiTaskCommand(
+      type: AiTaskCommandType.edit,
+      boardId: '',
+      taskId: task.id,
+      description: description,
+      message: 'Updated "${task.title}".',
+    );
+  }
+
+  AiTaskCommand? _planRenameTaskCommand(
+    String instruction,
+    String normalized,
+    List<KanbanTask> tasks,
+  ) {
+    if (!normalized.contains('rename ') && !normalized.contains('call ')) {
+      return null;
+    }
+    final task = _findTask(instruction, tasks);
+    if (task == null) {
+      return null;
+    }
+    final title = _titleAfterRenameInstruction(instruction);
+    if (title.isEmpty) {
+      return null;
+    }
+    return AiTaskCommand(
+      type: AiTaskCommandType.edit,
+      boardId: '',
+      taskId: task.id,
+      title: title,
+      message: 'Renamed task to "$title".',
+    );
+  }
+
+  AiTaskCommand? _planDeleteTaskCommand(
+    String instruction,
+    String normalized,
+    List<KanbanTask> tasks,
+  ) {
+    if (!normalized.contains('delete ') && !normalized.contains('remove ')) {
+      return null;
+    }
+    final task = _findTask(instruction, tasks);
+    if (task == null) {
+      return null;
+    }
+    return AiTaskCommand(
+      type: AiTaskCommandType.delete,
+      boardId: '',
+      taskId: task.id,
+      message: 'Deleted "${task.title}".',
+    );
   }
 
   String _normalizeSlashCommandInstruction(
